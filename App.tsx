@@ -89,9 +89,14 @@ const App: React.FC = () => {
 
                 // Type specific checks
                 if (col.type === 'date') {
+                    // Allow flexible date parsing
                     const rowDate = dayjs(rowValue);
                     const filterDate = dayjs(filterValue);
-                    if (!rowDate.isValid() || !filterDate.isValid()) return false;
+                    
+                    // If row has no valid date, it shouldn't match date logic unless operator checks for inequality might handle nulls differently?
+                    // Usually spreadsheets exclude invalid dates from date filters
+                    if (!rowDate.isValid()) return false; 
+                    if (!filterDate.isValid()) return true; // If filter is invalid, ignore or match all? Usually ignore filter. Here we assume filter is valid if set.
 
                     switch(filter.operator) {
                         case 'isSame': return rowDate.isSame(filterDate, 'day');
@@ -104,7 +109,10 @@ const App: React.FC = () => {
                 if (col.type === 'number' || col.type === 'rating') {
                     const rNum = Number(rowValue);
                     const fNum = Number(filterValue);
-                    if (isNaN(rNum) || isNaN(fNum)) return false;
+                    
+                    // If row value is not a number (e.g. empty string), it shouldn't match numeric filters typically
+                    if (rowValue === '' || rowValue === null || rowValue === undefined || isNaN(rNum)) return false;
+                    if (isNaN(fNum)) return true; // Ignore invalid filter
 
                     switch(filter.operator) {
                         case 'equals': return rNum === fNum;
@@ -302,10 +310,11 @@ const App: React.FC = () => {
   const handleSmartFill = async () => {
     setAiStatus(AIStatus.LOADING);
     try {
-      const newRows = await generateSmartRows(columns, rows);
+      // Generating 100 rows as requested
+      const newRows = await generateSmartRows(columns, rows, 100);
       setRows(prev => [...prev, ...newRows]);
       setAiStatus(AIStatus.SUCCESS);
-      message.success('已生成 5 行新数据');
+      message.success('已生成 100 行新数据');
     } catch (error) {
       console.error(error);
       setAiStatus(AIStatus.ERROR);

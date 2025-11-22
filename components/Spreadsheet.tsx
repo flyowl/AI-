@@ -262,11 +262,11 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
       if (col?.type === 'date') {
           return (
               <DatePicker 
-                  size="small"
-                  className="flex-1"
+                  className="flex-1 w-full"
                   value={filter.value ? dayjs(filter.value) : null}
                   onChange={(_, dateStr) => handleChange(dateStr)}
                   placeholder="选择日期"
+                  format="YYYY-MM-DD"
               />
           );
       }
@@ -274,12 +274,12 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
       if (col?.type === 'select') {
           return (
               <Select
-                  size="small"
-                  className="flex-1"
+                  className="flex-1 w-full"
                   placeholder="选择值"
                   value={filter.value}
                   onChange={handleChange}
                   options={col.options?.map(opt => ({ label: opt.label, value: opt.label }))}
+                  allowClear
               />
           );
       }
@@ -287,7 +287,6 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
       if (col?.type === 'number' || col?.type === 'rating') {
           return (
               <InputNumber
-                  size="small"
                   className="flex-1 w-full"
                   placeholder="输入数字"
                   value={filter.value}
@@ -298,7 +297,6 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
 
       return (
           <Input 
-              size="small" 
               placeholder="输入值" 
               value={filter.value} 
               onChange={(e) => handleChange(e.target.value)} 
@@ -308,16 +306,19 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   };
 
   const filterContent = (
-      <div className="w-[420px] p-4">
+      <div className="w-[500px] p-4">
           <div className="flex items-center justify-between mb-4">
-            <h4 className="font-semibold text-slate-700">筛选数据</h4>
+            <h4 className="font-semibold text-slate-700 flex items-center gap-2">
+                <FilterIcon size={16} className="text-indigo-500"/> 
+                筛选数据
+            </h4>
             {filters.length > 0 && (
                 <Button size="small" type="text" className="text-slate-400 text-xs hover:text-red-500" onClick={() => onFiltersChange([])}>清除全部</Button>
             )}
           </div>
           
           {filters.length > 0 && (
-              <div className="mb-4 flex justify-center">
+              <div className="mb-4 bg-indigo-50/50 p-2 rounded-lg border border-indigo-50 flex justify-center">
                   <Segmented 
                      options={[
                          { label: '符合所有条件 (AND)', value: 'and' },
@@ -325,41 +326,40 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                      ]}
                      value={filterMatchType}
                      onChange={(val) => onFilterMatchTypeChange(val as FilterMatchType)}
-                     size="small"
                   />
               </div>
           )}
 
-          <div className="space-y-2 mb-4 max-h-[300px] overflow-y-auto">
+          <div className="space-y-3 mb-4 max-h-[350px] overflow-y-auto">
               {filters.map((filter, idx) => {
                   const col = columns.find(c => c.id === filter.columnId);
                   const operators = getOperatorsForType(col?.type || 'text');
                   
                   return (
-                      <div key={idx} className="flex items-center gap-2 bg-slate-50 p-2 rounded border border-slate-200 group">
+                      <div key={idx} className="flex items-center gap-2 bg-white p-3 rounded-lg border border-slate-200 shadow-sm group transition-shadow hover:shadow-md hover:border-indigo-100">
                           {/* Column Select */}
                           <Select 
-                              size="small"
-                              className="w-28"
+                              className="w-32 shrink-0"
                               value={filter.columnId}
-                              options={columns.map(c => ({ label: c.label, value: c.id }))}
+                              options={columns.map(c => ({ label: <span className="flex items-center gap-2">{getColumnIcon(c.type)} {c.label}</span>, value: c.id }))}
                               onChange={(val) => {
                                   const newFilters = [...filters];
                                   newFilters[idx].columnId = val;
                                   newFilters[idx].value = ''; // reset value
-                                  newFilters[idx].operator = 'contains'; // reset op to safe default
-                                  // if new col is number, set to equals
+                                  
+                                  // if new col is number, set to equals, etc
                                   const newCol = columns.find(c => c.id === val);
                                   if (newCol?.type === 'number' || newCol?.type === 'rating') newFilters[idx].operator = 'equals';
-                                  if (newCol?.type === 'date') newFilters[idx].operator = 'isSame';
+                                  else if (newCol?.type === 'date') newFilters[idx].operator = 'isSame';
+                                  else newFilters[idx].operator = 'contains';
+                                  
                                   onFiltersChange(newFilters);
                               }}
                           />
                           
                           {/* Operator Select */}
                           <Select 
-                              size="small"
-                              className="w-24"
+                              className="w-28 shrink-0"
                               value={filter.operator}
                               options={operators}
                               onChange={(val) => {
@@ -373,8 +373,8 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                           {renderFilterValueInput(filter, idx)}
 
                           <Button 
-                             type="text" size="small" icon={<Trash2 size={14} />} 
-                             className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                             type="text" shape="circle" icon={<Trash2 size={16} />} 
+                             className="text-slate-400 hover:text-red-500 hover:bg-red-50"
                              onClick={() => onFiltersChange(filters.filter((_, i) => i !== idx))}
                           />
                       </div>
@@ -391,7 +391,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                   operator: firstCol.type === 'date' ? 'isSame' : (firstCol.type === 'number' ? 'equals' : 'contains'), 
                   value: '' 
               }]);
-          }}>添加条件</Button>
+          }} className="h-10">添加条件</Button>
       </div>
   );
 

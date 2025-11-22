@@ -29,7 +29,7 @@ const Sidebar: React.FC<SidebarProps> = ({ analysis, status, onAnalyze, onGenera
             className="flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-100 hover:bg-indigo-100 hover:border-indigo-200 transition-all font-medium text-sm disabled:opacity-50"
           >
             {status === AIStatus.LOADING ? <Loader2 className="animate-spin" size={16}/> : <Sparkles size={16} />}
-            智能填充 (5行)
+            智能填充 (100行)
           </button>
           
           <button
