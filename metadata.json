@@ -1,0 +1,5 @@
+{
+  "name": "AI SmartSheets",
+  "description": "An intelligent online spreadsheet application powered by Gemini. Features smart data generation, instant analysis, and automated visualization.",
+  "requestFramePermissions": []
+}
