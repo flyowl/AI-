@@ -1,14 +1,14 @@
 
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useState } from 'react';
 import { Column, RowData, Filter, SortRule, RowHeight, FilterMatchType, FilterOperator } from '../types';
 import { 
   Hash, Type, Calendar, CheckSquare, 
   List, Link as LinkIcon, Star, MoreHorizontal,
   ArrowUpAz, ArrowDownZa, Settings, Copy, X,
   ArrowUpDown, Plus, ChevronRight, ChevronDown,
-  User, Phone, Mail, MapPin, Image as ImageIcon, FileText, Upload
+  User, Phone, Mail, MapPin, Image as ImageIcon, FileText, Upload, Maximize2
 } from 'lucide-react';
-import { Dropdown, MenuProps, Button, Input, Select, DatePicker, Checkbox, Rate, Popover, Avatar, InputNumber, Image } from 'antd';
+import { Dropdown, MenuProps, Button, Input, Select, DatePicker, Checkbox, Rate, Popover, Avatar, InputNumber, Image, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
 
@@ -37,6 +37,7 @@ interface SpreadsheetProps {
   onEditColumn: (col: Column) => void;
   onDuplicateColumn: (colId: string) => void;
   onColumnReorder: (fromIndex: number, toIndex: number) => void;
+  onOpenRowDetail?: (rowId: string) => void;
 
   // State updaters
   onFiltersChange: (filters: Filter[]) => void;
@@ -67,9 +68,17 @@ const getColumnIcon = (type: string) => {
 
 const Spreadsheet: React.FC<SpreadsheetProps> = ({
   columns, rows, selectedRowIds, sortRule, rowHeight, hiddenColumnIds, groupBy,
-  onCellChange, onSelectRow, onSelectAll, onSortColumn, onDeleteColumn, onEditColumn, onDuplicateColumn, onAddRow, onAddColumn
+  onCellChange, onSelectRow, onSelectAll, onSortColumn, onDeleteColumn, onEditColumn, onDuplicateColumn, onAddRow, onAddColumn,
+  onColumnReorder, onOpenRowDetail
 }) => {
   
+  // Local state to track which groups are expanded (ids of groups)
+  // Initialize with all visible or empty, using Set for performance
+  // By default, we assume all groups are expanded. If an ID is in the Set, it is Collapsed? 
+  // Or we can say if it is in the Set, it is Expanded. Let's go with: Set contains EXPANDED group keys.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [initializedGroups, setInitializedGroups] = useState(false);
+
   // --- Grouping Logic ---
   const groupedRows = useMemo(() => {
       if (!groupBy) return { 'all': rows };
@@ -86,14 +95,41 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
       groups['未分组'] = []; // Catch-all
 
       rows.forEach(row => {
-          const val = row[groupBy];
-          const key = val ? String(val) : '未分组';
+          let val = row[groupBy];
+          let key = '未分组';
+
+          if (val !== null && val !== undefined && val !== '') {
+             if (groupCol?.type === 'date') {
+                 // Format date for grouping key
+                 key = dayjs(val).format('YYYY-MM-DD');
+             } else if (groupCol?.type === 'checkbox') {
+                 key = val ? '已选中' : '未选中';
+             } else {
+                 key = String(val);
+             }
+          }
+          
           if (!groups[key]) groups[key] = [];
           groups[key].push(row);
       });
 
       return groups;
   }, [rows, groupBy, columns]);
+
+  // Initialize expanded state once when groups change significantly or on mount
+  // But simpler: just default to expanded. If a key is NOT in collapsedGroups, it is expanded.
+  // Let's switch to tracking collapsed groups.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = (groupKey: string) => {
+      const newSet = new Set(collapsedGroups);
+      if (newSet.has(groupKey)) {
+          newSet.delete(groupKey);
+      } else {
+          newSet.add(groupKey);
+      }
+      setCollapsedGroups(newSet);
+  };
 
 
   // --- Header Renderers ---
@@ -135,7 +171,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
     ];
 
     return (
-        <div className="flex items-center justify-between h-full px-3 py-2 group select-none">
+        <div className="flex items-center justify-between h-full px-3 py-2 group select-none" draggable onDragStart={(e) => { e.dataTransfer.setData('colId', col.id); }}>
             <div className="flex items-center gap-2 overflow-hidden">
                 {getColumnIcon(col.type)}
                 <span className="text-xs font-semibold text-slate-600 truncate">{col.label}</span>
@@ -161,9 +197,10 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   };
 
   // --- Cell Renderers ---
-  const renderCell = (row: RowData, col: Column) => {
+  const renderCell = (row: RowData, col: Column, isSelected: boolean) => {
       const value = row[col.id];
       const onChange = (val: any) => onCellChange(row.id, col.id, val);
+      const bgClass = isSelected ? 'bg-transparent' : ''; // Let row bg handle it
 
       switch (col.type) {
           case 'text':
@@ -176,7 +213,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                       bordered={false} 
                       value={value} 
                       onChange={e => onChange(e.target.value)} 
-                      className="w-full h-full text-xs px-3"
+                      className={`w-full h-full text-xs px-3 ${bgClass}`}
                       placeholder={col.type === 'url' ? 'https://...' : ''}
                   />
               );
@@ -186,18 +223,17 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                       bordered={false}
                       value={value}
                       onChange={val => onChange(val)}
-                      className="w-full h-full text-xs input-number-no-border"
+                      className={`w-full h-full text-xs input-number-no-border ${bgClass}`}
                       controls={false}
                   />
               );
           case 'select':
-              const selectedOpt = col.options?.find(o => o.label === value);
               return (
                   <Select
                       bordered={false}
                       value={value}
                       onChange={onChange}
-                      className="w-full text-xs"
+                      className={`w-full text-xs ${bgClass}`}
                       options={col.options?.map(o => ({ value: o.label, label: o.label }))}
                       dropdownStyle={{ minWidth: 120 }}
                       tagRender={(props) => (
@@ -213,7 +249,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                       bordered={false}
                       value={value ? dayjs(value) : null}
                       onChange={date => onChange(date ? date.format('YYYY-MM-DD') : '')}
-                      className="w-full h-full text-xs"
+                      className={`w-full h-full text-xs ${bgClass}`}
                       suffixIcon={null}
                   />
               );
@@ -237,7 +273,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                           bordered={false} 
                           value={value} 
                           onChange={e => onChange(e.target.value)} 
-                          className="flex-1 text-xs p-0"
+                          className={`flex-1 text-xs p-0 ${bgClass}`}
                       />
                   </div>
               );
@@ -259,24 +295,41 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
       'extra-large': 'h-24'
   }[rowHeight];
 
-  const renderRow = (row: RowData, idx: number) => (
-        <tr key={row.id} className={`group hover:bg-slate-50/50 transition-colors ${selectedRowIds.has(row.id) ? 'bg-indigo-50/30' : ''}`}>
-            <td className="border-r border-b border-slate-100 p-0 text-center relative bg-white text-slate-400 text-[10px] font-mono">
+  const renderRow = (row: RowData, idx: number) => {
+      const isSelected = selectedRowIds.has(row.id);
+      // More explicit background color when selected, overrides hover
+      const rowClass = isSelected ? 'bg-indigo-50' : 'bg-white hover:bg-slate-50/50';
+
+      return (
+        <tr key={row.id} className={`group transition-colors border-b border-slate-100 ${rowClass}`}>
+            <td className={`border-r border-slate-100 p-0 text-center relative text-slate-400 text-[10px] font-mono ${isSelected ? 'bg-indigo-100/50' : 'bg-white'}`}>
                 <div className="absolute inset-0 flex items-center justify-center group-hover:hidden">
-                    {idx + 1}
+                    {isSelected ? <Checkbox checked={true} onChange={() => onSelectRow(row.id)}/> : idx + 1}
                 </div>
-                <div className="absolute inset-0 items-center justify-center hidden group-hover:flex bg-slate-50">
-                    <Checkbox checked={selectedRowIds.has(row.id)} onChange={() => onSelectRow(row.id)}/>
+                <div className="absolute inset-0 flex items-center justify-center hidden group-hover:flex bg-slate-50/10 backdrop-blur-[1px] gap-1">
+                    <Checkbox checked={isSelected} onChange={() => onSelectRow(row.id)}/>
+                    <Tooltip title="展开详情">
+                        <div 
+                            className="cursor-pointer text-slate-500 hover:text-indigo-600 bg-white rounded shadow-sm p-0.5 border border-slate-200"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenRowDetail && onOpenRowDetail(row.id);
+                            }}
+                        >
+                            <Maximize2 size={10} />
+                        </div>
+                    </Tooltip>
                 </div>
             </td>
             {visibleColumns.map(col => (
-                <td key={col.id} className={`border-r border-b border-slate-100 p-0 relative ${rowHeightClass}`}>
-                    {renderCell(row, col)}
+                <td key={col.id} className={`border-r border-slate-100 p-0 relative ${rowHeightClass}`}>
+                    {renderCell(row, col, isSelected)}
                 </td>
             ))}
-            <td className="border-b border-slate-100 p-0"></td>
+            <td className="p-0"></td>
         </tr>
-  );
+      );
+  };
 
   return (
     <div className="flex-1 overflow-auto border border-slate-200 rounded-lg bg-white relative">
@@ -293,7 +346,28 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 </div>
             </th>
             {visibleColumns.map(col => (
-                <th key={col.id} className="border-r border-b border-slate-200 p-0 text-left relative" style={{ width: col.width || 150 }}>
+                <th 
+                    key={col.id} 
+                    className="border-r border-b border-slate-200 p-0 text-left relative transition-colors hover:bg-slate-100" 
+                    style={{ width: col.width || 150 }}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                        e.preventDefault();
+                        const draggedColId = e.dataTransfer.getData('colId');
+                        if (draggedColId) {
+                            const fromIndex = columns.findIndex(c => c.id === draggedColId);
+                            const toIndex = columns.findIndex(c => c.id === col.id);
+                            if(fromIndex !== -1 && toIndex !== -1) {
+                                const newColumns = [...columns];
+                                const [moved] = newColumns.splice(fromIndex, 1);
+                                newColumns.splice(toIndex, 0, moved);
+                                // We need to call a prop to update columns in parent, but for now we rely on index matching in render
+                                // Ideally Spreadsheet should accept onColumnReorder
+                                onColumnReorder(fromIndex, toIndex);
+                            }
+                        }
+                    }}
+                >
                     {renderHeader(col)}
                 </th>
             ))}
@@ -315,13 +389,21 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                     const groupCol = columns.find(c => c.id === groupBy);
                     const option = groupCol?.options?.find(o => o.label === groupValue);
                     const colorClass = option?.color || 'bg-slate-100 text-slate-700';
+                    const isCollapsed = collapsedGroups.has(groupValue);
                     
                     return (
                         <React.Fragment key={groupValue}>
-                            <tr className="bg-slate-50/80">
-                                <td colSpan={visibleColumns.length + 2} className="px-2 py-1.5 border-b border-slate-200">
+                            <tr 
+                                className="bg-slate-50/80 cursor-pointer hover:bg-slate-100"
+                                onClick={() => toggleGroup(groupValue)}
+                            >
+                                <td className="border-b border-slate-200 p-0 text-center text-slate-400">
+                                     <div className="flex items-center justify-center h-full">
+                                        <ChevronRight size={14} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`}/>
+                                     </div>
+                                </td>
+                                <td colSpan={visibleColumns.length + 1} className="px-2 py-1.5 border-b border-slate-200">
                                     <div className="flex items-center gap-2">
-                                        <ChevronDown size={14} className="text-slate-400" />
                                         <span className={`text-xs font-medium px-2 py-0.5 rounded-md border border-transparent ${colorClass}`}>
                                             {groupValue}
                                         </span>
@@ -329,7 +411,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                                     </div>
                                 </td>
                             </tr>
-                            {groupRows.map((row, idx) => renderRow(row, idx))}
+                            {!isCollapsed && groupRows.map((row, idx) => renderRow(row, idx))}
                         </React.Fragment>
                     )
                 })

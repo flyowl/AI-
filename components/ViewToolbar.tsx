@@ -193,32 +193,39 @@ const ViewToolbar: React.FC<ViewToolbarProps> = ({ view, columns, onUpdateConfig
   );
 
   // --- Group Logic ---
-  const renderGroupContent = () => (
-      <div className="w-64 p-2">
-          <div className="text-xs font-medium text-slate-500 mb-2">分组依据</div>
-          {groupBy && (
-              <div className="flex items-center justify-between bg-indigo-50 text-indigo-700 px-3 py-2 rounded mb-2 text-sm">
-                  <span>{columns.find(c => c.id === groupBy)?.label}</span>
-                  <X size={14} className="cursor-pointer hover:text-indigo-900" onClick={() => onUpdateConfig({ groupBy: null })}/>
-              </div>
-          )}
-          <div className="max-h-60 overflow-y-auto">
-              {columns.filter(c => c.type === 'select' || c.type === 'checkbox' || c.type === 'text').map(col => (
-                  <div 
-                    key={col.id}
-                    className={`px-3 py-2 hover:bg-slate-50 cursor-pointer rounded text-sm flex items-center justify-between ${groupBy === col.id ? 'bg-slate-50 font-medium' : ''}`}
-                    onClick={() => onUpdateConfig({ groupBy: col.id })}
-                  >
-                      {col.label}
-                      {groupBy === col.id && <Settings2 size={14} className="text-indigo-500"/>}
-                  </div>
-              ))}
-              {columns.filter(c => c.type === 'select' || c.type === 'checkbox' || c.type === 'text').length === 0 && (
-                  <div className="text-xs text-slate-400 p-2">无可分组列 (需选项或文本类型)</div>
-              )}
-          </div>
-      </div>
-  );
+  const renderGroupContent = () => {
+      // Filter columns that make sense for grouping
+      const groupableColumns = columns.filter(c => 
+        ['select', 'checkbox', 'text', 'person', 'date'].includes(c.type)
+      );
+
+      return (
+        <div className="w-64 p-2">
+            <div className="text-xs font-medium text-slate-500 mb-2">分组依据</div>
+            {groupBy && (
+                <div className="flex items-center justify-between bg-indigo-50 text-indigo-700 px-3 py-2 rounded mb-2 text-sm">
+                    <span>{columns.find(c => c.id === groupBy)?.label}</span>
+                    <X size={14} className="cursor-pointer hover:text-indigo-900" onClick={() => onUpdateConfig({ groupBy: null })}/>
+                </div>
+            )}
+            <div className="max-h-60 overflow-y-auto">
+                {groupableColumns.map(col => (
+                    <div 
+                        key={col.id}
+                        className={`px-3 py-2 hover:bg-slate-50 cursor-pointer rounded text-sm flex items-center justify-between ${groupBy === col.id ? 'bg-slate-50 font-medium' : ''}`}
+                        onClick={() => onUpdateConfig({ groupBy: col.id })}
+                    >
+                        {col.label}
+                        {groupBy === col.id && <Settings2 size={14} className="text-indigo-500"/>}
+                    </div>
+                ))}
+                {groupableColumns.length === 0 && (
+                    <div className="text-xs text-slate-400 p-2">无可分组列</div>
+                )}
+            </div>
+        </div>
+      );
+  };
 
   // --- Hidden Columns Logic ---
   const renderHiddenContent = () => (

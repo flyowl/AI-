@@ -55,6 +55,11 @@ const App: React.FC = () => {
   const updateActiveSheet = (updater: (sheet: Sheet) => Sheet) => {
       setSheets(prev => prev.map(s => s.id === activeSheetId ? updater(s) : s));
   };
+  
+  // Helper to update a specific sheet (could be different from active)
+  const updateSheetById = (id: string, updater: (sheet: Sheet) => Sheet) => {
+      setSheets(prev => prev.map(s => s.id === id ? updater(s) : s));
+  };
 
   // Chat / AI State
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -151,17 +156,19 @@ const App: React.FC = () => {
       setMessages(prev => [...prev, { id: crypto.randomUUID(), role, content, timestamp: Date.now() }]);
   };
 
-  const executeAiAction = async (action: 'fill' | 'analyze' | 'chat', payload?: string) => {
+  const executeAiAction = async (action: 'fill' | 'analyze' | 'chat', payload?: string, targetSheetId?: string) => {
       setAiStatus(AIStatus.LOADING);
+      const targetSheet = sheets.find(s => s.id === targetSheetId) || activeSheet;
+
       try {
           if (action === 'fill') {
-              const newRows = await generateSmartRows(activeSheet.columns, activeSheet.rows, 50);
-              updateActiveSheet(sheet => ({ ...sheet, rows: [...sheet.rows, ...newRows] }));
-              addMessage('ai', '✅ 已为您智能填充 50 行新数据。');
+              const newRows = await generateSmartRows(targetSheet.columns, targetSheet.rows, 50);
+              updateSheetById(targetSheet.id, sheet => ({ ...sheet, rows: [...sheet.rows, ...newRows] }));
+              addMessage('ai', `✅ 已为“${targetSheet.name}”智能填充 50 行新数据。`);
           } else if (action === 'analyze') {
-              const result = await analyzeDataset(activeSheet.columns, activeSheet.rows);
+              const result = await analyzeDataset(targetSheet.columns, targetSheet.rows);
               setAnalysis(result);
-              addMessage('ai', `📊 分析完成！\n\n**摘要**: ${result.summary}\n\n**关键趋势**:\n${result.keyTrends.map(t => `- ${t}`).join('\n')}\n\n建议图表: ${result.suggestedChartType}。`);
+              addMessage('ai', `📊 “${targetSheet.name}” 分析完成！\n\n**摘要**: ${result.summary}\n\n**关键趋势**:\n${result.keyTrends.map(t => `- ${t}`).join('\n')}\n\n建议图表: ${result.suggestedChartType}。`);
           } else if (action === 'chat' && payload) {
              // Heuristic check for Create/Generate intent
              const lowerPrompt = payload.toLowerCase();
@@ -190,9 +197,9 @@ const App: React.FC = () => {
                  setActiveSheetId(newSheet.id);
                  addMessage('ai', `✅ 已成功创建“${sheetName}”，包含 ${columns.length} 个字段和 ${rows.length} 条示例数据。`);
              } else if (payload.includes('填充') || payload.includes('数据')) {
-                 await executeAiAction('fill');
+                 await executeAiAction('fill', undefined, targetSheetId);
              } else if (payload.includes('分析') || payload.includes('图表')) {
-                 await executeAiAction('analyze');
+                 await executeAiAction('analyze', undefined, targetSheetId);
              } else {
                  // Generic Chat Response
                  setTimeout(() => {
@@ -282,8 +289,12 @@ const App: React.FC = () => {
                <Sidebar 
                  messages={messages}
                  status={aiStatus}
-                 onSendMessage={(text) => { addMessage('user', text); executeAiAction('chat', text); }}
+                 onSendMessage={(text, targetId) => { addMessage('user', text); executeAiAction('chat', text, targetId); }}
                  onQuickAction={(action) => { addMessage('user', action === 'fill' ? '智能填充' : '分析数据'); executeAiAction(action); }}
+                 
+                 sheets={sheets}
+                 activeSheetId={activeSheetId}
+                 
                  views={activeSheet.views}
                  activeViewId={activeSheet.activeViewId}
                  onSwitchView={handleSwitchView}

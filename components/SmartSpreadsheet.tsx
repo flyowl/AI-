@@ -7,7 +7,9 @@ import GalleryGrid from './GalleryGrid';
 import DataViz from './DataViz';
 import ViewToolbar from './ViewToolbar';
 import AddColumnModal from './AddColumnModal';
-import { Modal, message } from 'antd';
+import RowDetailModal from './RowDetailModal';
+import { Modal, message, Button } from 'antd';
+import { Trash2, Copy, X } from 'lucide-react';
 import dayjs from 'dayjs';
 
 interface SmartSpreadsheetProps {
@@ -42,7 +44,11 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   // --- Local UI State ---
   const [searchTerm, setSearchTerm] = useState('');
   const [isColumnModalOpen, setIsColumnModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<Column | null>(null);
+  
+  // Row Detail Modal State
+  const [detailRowId, setDetailRowId] = useState<string | null>(null);
 
   // --- Derived State ---
   const activeView = useMemo(() => 
@@ -159,6 +165,12 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       onRowsChange(newRows);
   };
 
+  const handleRowUpdate = (rowId: string, updates: Record<string, any>) => {
+      const newRows = rows.map(row => row.id === rowId ? { ...row, ...updates } : row);
+      onRowsChange(newRows);
+      message.success('行数据已更新');
+  };
+
   const handleAddRow = () => {
       const newId = crypto.randomUUID();
       const newRow: RowData = { id: newId };
@@ -180,19 +192,26 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       message.success('行已删除');
   };
 
-  const handleDeleteSelected = () => {
-    Modal.confirm({
-        title: '确认删除',
-        content: `确定要删除选中的 ${selectedRowIds.size} 行数据吗？`,
-        okText: '删除',
-        okType: 'danger',
-        onOk: () => {
-            const newRows = rows.filter(r => !selectedRowIds.has(r.id));
-            onRowsChange(newRows);
-            onSelectionChange(new Set());
-            message.success('数据已删除');
-        }
-    });
+  const handleDeleteSelectedTrigger = () => {
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDeleteSelected = () => {
+    const newRows = rows.filter(r => !selectedRowIds.has(r.id));
+    onRowsChange(newRows);
+    onSelectionChange(new Set());
+    setIsDeleteModalOpen(false);
+    message.success('数据已删除');
+  };
+  
+  const handleDuplicateSelected = () => {
+      const rowsToDuplicate = rows.filter(r => selectedRowIds.has(r.id));
+      const newRows = rowsToDuplicate.map(r => ({ ...r, id: crypto.randomUUID() }));
+      
+      // Insert them at the end
+      onRowsChange([...rows, ...newRows]);
+      onSelectionChange(new Set());
+      message.success(`已复制 ${rowsToDuplicate.length} 行数据`);
   };
 
   const handleSelectRow = (id: string) => {
@@ -278,7 +297,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
        </div>
 
        {/* Main View Area */}
-       <div className="flex-1 overflow-hidden flex flex-col p-4 gap-4">
+       <div className="flex-1 overflow-hidden flex flex-col p-4 gap-4 relative">
             {activeView.type === 'grid' && (
                 <Spreadsheet 
                     columns={columns} 
@@ -295,7 +314,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     onAddRow={handleAddRow}
                     onSelectRow={handleSelectRow}
                     onSelectAll={handleSelectAll}
-                    onDeleteSelected={handleDeleteSelected}
+                    onDeleteSelected={handleDeleteSelectedTrigger}
                     onAddColumn={() => { setEditingColumn(null); setIsColumnModalOpen(true); }}
                     onEditColumn={(col) => { setEditingColumn(col); setIsColumnModalOpen(true); }}
                     onColumnReorder={handleColumnReorder}
@@ -308,6 +327,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     onGroupByChange={(id) => handleUpdateViewConfig({ groupBy: id })}
                     onRowHeightChange={(height) => handleUpdateViewConfig({ rowHeight: height })}
                     onHiddenColumnIdsChange={(ids) => handleUpdateViewConfig({ hiddenColumnIds: Array.from(ids) })}
+                    onOpenRowDetail={setDetailRowId}
                 />
             )}
 
@@ -331,7 +351,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                             columns={columns}
                             rows={processedRows}
                             groupByColId={activeView.config.groupBy || columns.find(c => c.type === 'select')?.id || null}
-                            onCardClick={() => {}}
+                            onCardClick={(id) => setDetailRowId(id)}
                         />
                         </div>
                 </div>
@@ -352,6 +372,50 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                 />
                 </div>
             )}
+
+            {/* Selection Floating Bar */}
+            {selectedRowIds.size > 0 && (
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-slate-200 rounded-full px-6 py-2.5 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
+                    <div className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                        <div className="bg-indigo-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                            {selectedRowIds.size}
+                        </div>
+                        <span>项已选择</span>
+                    </div>
+                    
+                    <div className="h-4 w-px bg-slate-200 mx-1"></div>
+                    
+                    <Button 
+                        type="text" 
+                        icon={<Copy size={14}/>} 
+                        size="small" 
+                        onClick={(e) => { e.stopPropagation(); handleDuplicateSelected(); }}
+                        className="text-slate-600 hover:text-indigo-600"
+                    >
+                        复制
+                    </Button>
+                    
+                    <Button 
+                        type="text" 
+                        danger 
+                        icon={<Trash2 size={14}/>} 
+                        size="small" 
+                        onClick={(e) => { e.stopPropagation(); handleDeleteSelectedTrigger(); }}
+                    >
+                        删除
+                    </Button>
+                    
+                    <div className="h-4 w-px bg-slate-200 mx-1"></div>
+
+                    <Button 
+                        type="text" 
+                        icon={<X size={14}/>} 
+                        size="small"
+                        className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full w-6 h-6 flex items-center justify-center p-0 min-w-0"
+                        onClick={(e) => { e.stopPropagation(); onSelectionChange(new Set()); }}
+                    />
+                </div>
+            )}
        </div>
 
        {/* Modals */}
@@ -363,6 +427,31 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
           }} 
           onSave={handleSaveColumn} 
           initialData={editingColumn}
+        />
+        
+        <Modal
+            title="确认删除"
+            open={isDeleteModalOpen}
+            onOk={confirmDeleteSelected}
+            onCancel={() => setIsDeleteModalOpen(false)}
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            centered
+            zIndex={1050}
+        >
+            <div className="py-2">
+                <p className="text-slate-600">确定要删除选中的 <span className="font-bold text-slate-900">{selectedRowIds.size}</span> 行数据吗？</p>
+                <p className="text-xs text-slate-400 mt-1">此操作无法撤销。</p>
+            </div>
+        </Modal>
+
+        <RowDetailModal 
+            isOpen={!!detailRowId}
+            onClose={() => setDetailRowId(null)}
+            rowData={detailRowId ? rows.find(r => r.id === detailRowId) || null : null}
+            columns={columns}
+            onSave={handleRowUpdate}
         />
     </div>
   );

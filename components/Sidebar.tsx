@@ -1,16 +1,20 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { AnalysisResult, AIStatus, ChatMessage, View, ViewType } from '../types';
-import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, MessageSquare } from 'lucide-react';
+import { AnalysisResult, AIStatus, ChatMessage, View, ViewType, Sheet } from '../types';
+import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, MessageSquare, Table2 } from 'lucide-react';
 import { Tabs, Input, Button, Avatar, List, Modal, Form, Select, Badge } from 'antd';
 
 interface SidebarProps {
   // Chat Props
   messages: ChatMessage[];
   status: AIStatus;
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string, targetSheetId?: string) => void;
   onQuickAction: (action: 'fill' | 'analyze') => void;
   
+  // Context Props
+  sheets: Sheet[];
+  activeSheetId: string;
+
   // View Props
   views: View[];
   activeViewId: string;
@@ -21,6 +25,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ 
     messages, status, onSendMessage, onQuickAction,
+    sheets, activeSheetId,
     views, activeViewId, onSwitchView, onCreateView, onDeleteView
 }) => {
   const [input, setInput] = useState('');
@@ -28,6 +33,16 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [newViewName, setNewViewName] = useState('');
   const [newViewType, setNewViewType] = useState<ViewType>('grid');
+  
+  // Target sheet for AI Context
+  const [targetSheetId, setTargetSheetId] = useState<string>(activeSheetId);
+
+  // Sync target sheet with active sheet unless AI is busy
+  useEffect(() => {
+    if (status !== AIStatus.LOADING) {
+        setTargetSheetId(activeSheetId);
+    }
+  }, [activeSheetId, status]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -36,7 +51,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSend = () => {
     if (!input.trim()) return;
-    onSendMessage(input);
+    onSendMessage(input, targetSheetId);
     setInput('');
   };
 
@@ -106,6 +121,22 @@ const Sidebar: React.FC<SidebarProps> = ({
 
              {/* Quick Actions & Input */}
              <div className="p-4 bg-white border-t border-slate-200">
+                {/* Target Sheet Selector */}
+                <div className="mb-2 flex items-center gap-2">
+                     <span className="text-xs text-slate-400">操作对象:</span>
+                     <Select
+                        size="small"
+                        value={targetSheetId}
+                        onChange={setTargetSheetId}
+                        className="flex-1"
+                        variant="filled"
+                        options={sheets.map(s => ({ 
+                            label: <span className="flex items-center gap-1"><Table2 size={12}/> {s.name}</span>, 
+                            value: s.id 
+                        }))}
+                     />
+                </div>
+
                 {messages.length < 2 && (
                     <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
                         <button onClick={() => onQuickAction('fill')} className="whitespace-nowrap px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-medium border border-indigo-100 hover:bg-indigo-100 transition-colors">
