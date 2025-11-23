@@ -1,13 +1,14 @@
-import React, { useState, useRef, useMemo } from 'react';
+
+import React, { useRef, useMemo } from 'react';
 import { Column, RowData, Filter, SortRule, RowHeight, FilterMatchType, FilterOperator } from '../types';
 import { 
-  Trash2, Plus, Hash, Type, Calendar, CheckSquare, 
+  Hash, Type, Calendar, CheckSquare, 
   List, Link as LinkIcon, Star, MoreHorizontal,
   ArrowUpAz, ArrowDownZa, Settings, Copy, X,
-  LayoutList, Grid3X3, Filter as FilterIcon, ArrowUpDown, Rows,
-  ChevronDown, Check, User, Phone, Mail, MapPin, Image as ImageIcon, FileText
+  ArrowUpDown, Plus, ChevronRight, ChevronDown,
+  User, Phone, Mail, MapPin, Image as ImageIcon, FileText, Upload
 } from 'lucide-react';
-import { Dropdown, MenuProps, Button, Input, Select, DatePicker, Checkbox, Rate, Modal, Popover, Switch, Segmented, Avatar, InputNumber } from 'antd';
+import { Dropdown, MenuProps, Button, Input, Select, DatePicker, Checkbox, Rate, Popover, Avatar, InputNumber, Image } from 'antd';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
 
@@ -64,689 +65,361 @@ const getColumnIcon = (type: string) => {
   }
 };
 
-const getOperatorsForType = (type: string): { label: string, value: FilterOperator }[] => {
-    const base: { label: string, value: FilterOperator }[] = [
-        { label: '为空', value: 'isEmpty' },
-        { label: '不为空', value: 'isNotEmpty' },
-    ];
-    if (type === 'number' || type === 'rating') {
-        return [
-            { label: '等于', value: 'equals' },
-            { label: '大于', value: 'gt' },
-            { label: '小于', value: 'lt' },
-            { label: '大于等于', value: 'gte' },
-            { label: '小于等于', value: 'lte' },
-            ...base
-        ];
-    }
-    if (type === 'date') {
-         return [
-            { label: '是', value: 'isSame' },
-            { label: '早于', value: 'isBefore' },
-            { label: '晚于', value: 'isAfter' },
-            ...base
-        ];
-    }
-    // Text, Select, etc
-    return [
-        { label: '包含', value: 'contains' },
-        { label: '不包含', value: 'doesNotContain' },
-        { label: '等于', value: 'equals' },
-        ...base
-    ];
-};
-
 const Spreadsheet: React.FC<SpreadsheetProps> = ({
-  columns,
-  rows,
-  selectedRowIds,
-  filters,
-  filterMatchType,
-  sortRule,
-  groupBy,
-  rowHeight,
-  hiddenColumnIds,
-  onCellChange,
-  onDeleteRow,
-  onAddRow,
-  onSelectRow,
-  onSelectAll,
-  onDeleteSelected,
-  onAddColumn,
-  onSortColumn,
-  onDeleteColumn,
-  onEditColumn,
-  onDuplicateColumn,
-  onColumnReorder,
-  onFiltersChange,
-  onFilterMatchTypeChange,
-  onSortRuleChange,
-  onGroupByChange,
-  onRowHeightChange,
-  onHiddenColumnIdsChange
+  columns, rows, selectedRowIds, sortRule, rowHeight, hiddenColumnIds, groupBy,
+  onCellChange, onSelectRow, onSelectAll, onSortColumn, onDeleteColumn, onEditColumn, onDuplicateColumn, onAddRow, onAddColumn
 }) => {
-  // Drag and Drop State
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const dragSourceIndex = useRef<number | null>(null);
+  
+  // --- Grouping Logic ---
+  const groupedRows = useMemo(() => {
+      if (!groupBy) return { 'all': rows };
 
-  // Visible columns
-  const visibleColumns = useMemo(() => columns.filter(c => !hiddenColumnIds.has(c.id)), [columns, hiddenColumnIds]);
+      const groups: Record<string, RowData[]> = {};
+      const groupCol = columns.find(c => c.id === groupBy);
 
-  // Selection State Helpers
-  const allSelected = rows.length > 0 && selectedRowIds.size === rows.length;
-  const indeterminate = selectedRowIds.size > 0 && selectedRowIds.size < rows.length;
-
-  // Grouping Logic
-  const groupedData = useMemo(() => {
-    if (!groupBy) return null;
-    
-    const groups: Record<string, RowData[]> = {};
-    rows.forEach(row => {
-        const key = String(row[groupBy] || '未分组');
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(row);
-    });
-
-    return Object.entries(groups);
-  }, [rows, groupBy]);
-
-  // Helper: Row Height Class
-  const getRowHeightClass = () => {
-      switch(rowHeight) {
-          case 'small': return 'py-1';
-          case 'large': return 'py-4';
-          case 'extra-large': return 'py-6';
-          default: return 'py-2.5'; // medium
+      // Initialize groups if it's a select column to preserve order/color
+      if (groupCol?.type === 'select' && groupCol.options) {
+          groupCol.options.forEach(opt => {
+              groups[opt.label] = [];
+          });
       }
+      groups['未分组'] = []; // Catch-all
+
+      rows.forEach(row => {
+          const val = row[groupBy];
+          const key = val ? String(val) : '未分组';
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(row);
+      });
+
+      return groups;
+  }, [rows, groupBy, columns]);
+
+
+  // --- Header Renderers ---
+  const renderHeader = (col: Column) => {
+    const menuItems: MenuProps['items'] = [
+        {
+            key: 'sort-asc',
+            label: '升序排列',
+            icon: <ArrowUpAz size={14}/>,
+            onClick: () => onSortColumn(col.id, 'asc')
+        },
+        {
+            key: 'sort-desc',
+            label: '降序排列',
+            icon: <ArrowDownZa size={14}/>,
+            onClick: () => onSortColumn(col.id, 'desc')
+        },
+        { type: 'divider' },
+        {
+            key: 'edit',
+            label: '编辑列',
+            icon: <Settings size={14}/>,
+            onClick: () => onEditColumn(col)
+        },
+        {
+            key: 'duplicate',
+            label: '复制列',
+            icon: <Copy size={14}/>,
+            onClick: () => onDuplicateColumn(col.id)
+        },
+        { type: 'divider' },
+        {
+            key: 'delete',
+            label: '删除列',
+            icon: <X size={14}/>,
+            danger: true,
+            onClick: () => onDeleteColumn(col.id)
+        }
+    ];
+
+    return (
+        <div className="flex items-center justify-between h-full px-3 py-2 group select-none">
+            <div className="flex items-center gap-2 overflow-hidden">
+                {getColumnIcon(col.type)}
+                <span className="text-xs font-semibold text-slate-600 truncate">{col.label}</span>
+            </div>
+            <div className="flex items-center">
+                 {sortRule?.columnId === col.id && (
+                     <div className="mr-1 text-indigo-500 bg-indigo-50 p-0.5 rounded">
+                         {sortRule.direction === 'asc' ? <ArrowUpAz size={12}/> : <ArrowDownZa size={12}/>}
+                     </div>
+                 )}
+                 <Dropdown menu={{ items: menuItems }} trigger={['click']}>
+                     <Button 
+                        type="text" 
+                        size="small" 
+                        className="opacity-0 group-hover:opacity-100 transition-opacity p-0 w-6 h-6 min-w-0 flex items-center justify-center text-slate-400 hover:text-slate-600"
+                     >
+                         <ArrowUpDown size={12} />
+                     </Button>
+                 </Dropdown>
+            </div>
+        </div>
+    );
   };
 
-  // Helper: Column Menu
-  const getColumnMenu = (col: Column): MenuProps['items'] => [
-    {
-        key: 'asc',
-        label: '升序排序 (A-Z)',
-        icon: <ArrowUpAz size={14}/>,
-        onClick: () => onSortColumn(col.id, 'asc')
-    },
-    {
-        key: 'desc',
-        label: '降序排序 (Z-A)',
-        icon: <ArrowDownZa size={14}/>,
-        onClick: () => onSortColumn(col.id, 'desc')
-    },
-    { type: 'divider' },
-    {
-        key: 'group',
-        label: '以此分组',
-        icon: <LayoutList size={14}/>,
-        onClick: () => onGroupByChange(col.id)
-    },
-    { type: 'divider' },
-    {
-        key: 'edit',
-        label: '列设置',
-        icon: <Settings size={14}/>,
-        onClick: () => onEditColumn(col)
-    },
-    {
-        key: 'duplicate',
-        label: '复制列',
-        icon: <Copy size={14}/>,
-        onClick: () => onDuplicateColumn(col.id)
-    },
-    { type: 'divider' },
-    {
-        key: 'hide',
-        label: '隐藏列',
-        icon: <X size={14}/>,
-        onClick: () => {
-            const newSet = new Set(hiddenColumnIds);
-            newSet.add(col.id);
-            onHiddenColumnIdsChange(newSet);
-        }
-    },
-    {
-        key: 'delete',
-        label: <span className="text-red-600">删除列</span>,
-        icon: <Trash2 size={14} className="text-red-600"/>,
-        onClick: () => Modal.confirm({
-            title: '删除列',
-            content: '确定要删除此列吗？此操作无法撤销。',
-            okText: '删除',
-            cancelText: '取消',
-            okButtonProps: { danger: true },
-            onOk: () => onDeleteColumn(col.id)
-        })
-    }
-  ];
+  // --- Cell Renderers ---
+  const renderCell = (row: RowData, col: Column) => {
+      const value = row[col.id];
+      const onChange = (val: any) => onCellChange(row.id, col.id, val);
 
-  // Toolbar Content Components
-  const fieldsContent = (
-      <div className="w-64">
-          <div className="px-3 py-2 border-b border-slate-100 font-medium text-slate-700 text-sm">显示/隐藏字段</div>
-          <div className="max-h-64 overflow-y-auto py-2">
-              {columns.map(col => (
-                  <div key={col.id} className="flex items-center justify-between px-3 py-1.5 hover:bg-slate-50">
-                      <span className="text-sm flex items-center gap-2 text-slate-600">
-                          {getColumnIcon(col.type)}
-                          {col.label}
-                      </span>
-                      <Switch 
-                        size="small" 
-                        checked={!hiddenColumnIds.has(col.id)}
-                        onChange={(checked) => {
-                            const newSet = new Set(hiddenColumnIds);
-                            if (checked) newSet.delete(col.id);
-                            else newSet.add(col.id);
-                            onHiddenColumnIdsChange(newSet);
-                        }}
+      switch (col.type) {
+          case 'text':
+          case 'url':
+          case 'email':
+          case 'phone':
+          case 'location':
+              return (
+                  <Input 
+                      bordered={false} 
+                      value={value} 
+                      onChange={e => onChange(e.target.value)} 
+                      className="w-full h-full text-xs px-3"
+                      placeholder={col.type === 'url' ? 'https://...' : ''}
+                  />
+              );
+          case 'number':
+              return (
+                  <InputNumber 
+                      bordered={false}
+                      value={value}
+                      onChange={val => onChange(val)}
+                      className="w-full h-full text-xs input-number-no-border"
+                      controls={false}
+                  />
+              );
+          case 'select':
+              const selectedOpt = col.options?.find(o => o.label === value);
+              return (
+                  <Select
+                      bordered={false}
+                      value={value}
+                      onChange={onChange}
+                      className="w-full text-xs"
+                      options={col.options?.map(o => ({ value: o.label, label: o.label }))}
+                      dropdownStyle={{ minWidth: 120 }}
+                      tagRender={(props) => (
+                           <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${col.options?.find(o => o.label === props.value)?.color || 'bg-slate-100 text-slate-700'}`}>
+                               {props.label}
+                           </span>
+                      )}
+                  />
+              );
+          case 'date':
+              return (
+                  <DatePicker 
+                      bordered={false}
+                      value={value ? dayjs(value) : null}
+                      onChange={date => onChange(date ? date.format('YYYY-MM-DD') : '')}
+                      className="w-full h-full text-xs"
+                      suffixIcon={null}
+                  />
+              );
+          case 'checkbox':
+              return (
+                  <div className="w-full h-full flex items-center justify-center">
+                      <Checkbox checked={!!value} onChange={e => onChange(e.target.checked)} />
+                  </div>
+              );
+          case 'rating':
+              return (
+                  <div className="w-full h-full flex items-center px-3">
+                      <Rate count={5} value={Number(value)} onChange={onChange} style={{ fontSize: 12 }} />
+                  </div>
+              );
+          case 'person':
+              return (
+                  <div className="w-full h-full flex items-center px-3 gap-2">
+                      <Avatar size={20} className="bg-indigo-500 text-[10px]">{value ? String(value)[0].toUpperCase() : <User size={10}/>}</Avatar>
+                      <Input 
+                          bordered={false} 
+                          value={value} 
+                          onChange={e => onChange(e.target.value)} 
+                          className="flex-1 text-xs p-0"
                       />
                   </div>
-              ))}
-          </div>
-      </div>
-  );
-
-  const renderFilterValueInput = (filter: Filter, index: number) => {
-      const col = columns.find(c => c.id === filter.columnId);
-      const isUnary = filter.operator === 'isEmpty' || filter.operator === 'isNotEmpty';
-      
-      if (isUnary) return <div className="flex-1"></div>;
-
-      const handleChange = (val: any) => {
-          const newFilters = [...filters];
-          newFilters[index].value = val;
-          onFiltersChange(newFilters);
-      };
-
-      if (col?.type === 'date') {
-          return (
-              <DatePicker 
-                  className="flex-1 w-full"
-                  value={filter.value ? dayjs(filter.value) : null}
-                  onChange={(_, dateStr) => handleChange(dateStr)}
-                  placeholder="选择日期"
-                  format="YYYY-MM-DD"
-              />
-          );
+              );
+          case 'image':
+              return (
+                <ImageCell value={value} onChange={onChange} />
+              );
+          default:
+              return <span className="px-3 text-xs text-slate-400">{String(value ?? '')}</span>;
       }
-
-      if (col?.type === 'select') {
-          return (
-              <Select
-                  className="flex-1 w-full"
-                  placeholder="选择值"
-                  value={filter.value}
-                  onChange={handleChange}
-                  options={col.options?.map(opt => ({ label: opt.label, value: opt.label }))}
-                  allowClear
-              />
-          );
-      }
-      
-      if (col?.type === 'number' || col?.type === 'rating') {
-          return (
-              <InputNumber
-                  className="flex-1 w-full"
-                  placeholder="输入数字"
-                  value={filter.value}
-                  onChange={handleChange}
-              />
-          )
-      }
-
-      return (
-          <Input 
-              placeholder="输入值" 
-              value={filter.value} 
-              onChange={(e) => handleChange(e.target.value)} 
-              className="flex-1"
-          />
-      );
   };
 
-  const filterContent = (
-      <div className="w-[500px] p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="font-semibold text-slate-700 flex items-center gap-2">
-                <FilterIcon size={16} className="text-indigo-500"/> 
-                筛选数据
-            </h4>
-            {filters.length > 0 && (
-                <Button size="small" type="text" className="text-slate-400 text-xs hover:text-red-500" onClick={() => onFiltersChange([])}>清除全部</Button>
-            )}
-          </div>
-          
-          {filters.length > 0 && (
-              <div className="mb-4 bg-indigo-50/50 p-2 rounded-lg border border-indigo-50 flex justify-center">
-                  <Segmented 
-                     options={[
-                         { label: '符合所有条件 (AND)', value: 'and' },
-                         { label: '符合任一条件 (OR)', value: 'or' }
-                     ]}
-                     value={filterMatchType}
-                     onChange={(val) => onFilterMatchTypeChange(val as FilterMatchType)}
-                  />
-              </div>
-          )}
+  const visibleColumns = columns.filter(c => !hiddenColumnIds.has(c.id));
 
-          <div className="space-y-3 mb-4 max-h-[350px] overflow-y-auto">
-              {filters.map((filter, idx) => {
-                  const col = columns.find(c => c.id === filter.columnId);
-                  const operators = getOperatorsForType(col?.type || 'text');
-                  
-                  return (
-                      <div key={idx} className="flex items-center gap-2 bg-white p-3 rounded-lg border border-slate-200 shadow-sm group transition-shadow hover:shadow-md hover:border-indigo-100">
-                          {/* Column Select */}
-                          <Select 
-                              className="w-32 shrink-0"
-                              value={filter.columnId}
-                              options={columns.map(c => ({ label: <span className="flex items-center gap-2">{getColumnIcon(c.type)} {c.label}</span>, value: c.id }))}
-                              onChange={(val) => {
-                                  const newFilters = [...filters];
-                                  newFilters[idx].columnId = val;
-                                  newFilters[idx].value = ''; // reset value
-                                  
-                                  // if new col is number, set to equals, etc
-                                  const newCol = columns.find(c => c.id === val);
-                                  if (newCol?.type === 'number' || newCol?.type === 'rating') newFilters[idx].operator = 'equals';
-                                  else if (newCol?.type === 'date') newFilters[idx].operator = 'isSame';
-                                  else newFilters[idx].operator = 'contains';
-                                  
-                                  onFiltersChange(newFilters);
-                              }}
-                          />
-                          
-                          {/* Operator Select */}
-                          <Select 
-                              className="w-28 shrink-0"
-                              value={filter.operator}
-                              options={operators}
-                              onChange={(val) => {
-                                  const newFilters = [...filters];
-                                  newFilters[idx].operator = val;
-                                  onFiltersChange(newFilters);
-                              }}
-                          />
+  const rowHeightClass = {
+      'small': 'h-8',
+      'medium': 'h-10',
+      'large': 'h-16',
+      'extra-large': 'h-24'
+  }[rowHeight];
 
-                          {/* Dynamic Value Input */}
-                          {renderFilterValueInput(filter, idx)}
-
-                          <Button 
-                             type="text" shape="circle" icon={<Trash2 size={16} />} 
-                             className="text-slate-400 hover:text-red-500 hover:bg-red-50"
-                             onClick={() => onFiltersChange(filters.filter((_, i) => i !== idx))}
-                          />
-                      </div>
-                  )
-              })}
-              {filters.length === 0 && <div className="text-sm text-slate-400 text-center py-8 border border-dashed border-slate-200 rounded-lg bg-slate-50">暂无筛选条件，请添加</div>}
-          </div>
-          
-          <Button block type="dashed" icon={<Plus size={14} />} onClick={() => {
-              const firstCol = columns[0];
-              onFiltersChange([...filters, { 
-                  id: crypto.randomUUID(), 
-                  columnId: firstCol.id, 
-                  operator: firstCol.type === 'date' ? 'isSame' : (firstCol.type === 'number' ? 'equals' : 'contains'), 
-                  value: '' 
-              }]);
-          }} className="h-10">添加条件</Button>
-      </div>
-  );
-
-  const sortContent = (
-      <div className="w-64 p-2">
-           <div className="px-2 py-1 font-medium text-slate-700 text-sm mb-2">排序规则</div>
-           {sortRule ? (
-               <div className="flex items-center justify-between bg-indigo-50 px-3 py-2 rounded text-sm text-indigo-700 border border-indigo-100">
-                   <span>{columns.find(c => c.id === sortRule.columnId)?.label}</span>
-                   <div className="flex items-center gap-2">
-                       <span className="text-xs opacity-70">{sortRule.direction === 'asc' ? 'A-Z' : 'Z-A'}</span>
-                       <Button size="small" type="text" icon={<X size={12} />} onClick={() => onSortRuleChange(null)} />
-                   </div>
-               </div>
-           ) : (
-               <div className="text-xs text-slate-400 px-2 pb-2">暂无排序</div>
-           )}
-           <div className="mt-2 pt-2 border-t border-slate-100">
-                <span className="text-xs text-slate-500 block mb-1 px-2">设置排序</span>
-                {columns.map(col => (
-                    <div 
-                        key={col.id} 
-                        className="flex items-center justify-between px-2 py-1.5 hover:bg-slate-50 cursor-pointer rounded"
-                        onClick={() => onSortRuleChange({ columnId: col.id, direction: 'asc' })}
-                    >
-                         <span className="text-sm">{col.label}</span>
-                         {sortRule?.columnId === col.id && <Check size={14} className="text-indigo-600" />}
-                    </div>
-                ))}
-           </div>
-      </div>
-  );
-
-  const groupContent = (
-    <div className="w-56 py-1">
-        <div className="px-3 py-2 font-medium text-slate-700 text-sm border-b border-slate-100 mb-1">分组依据</div>
-        <div 
-            className={`px-3 py-2 text-sm cursor-pointer hover:bg-slate-50 flex items-center justify-between ${!groupBy ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}
-            onClick={() => onGroupByChange(null)}
-        >
-            <span>不分组</span>
-            {!groupBy && <Check size={14} />}
-        </div>
-        {columns.map(col => (
-             <div 
-                key={col.id} 
-                className={`px-3 py-2 text-sm cursor-pointer hover:bg-slate-50 flex items-center justify-between ${groupBy === col.id ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}
-                onClick={() => onGroupByChange(col.id)}
-             >
-                 <span className="flex items-center gap-2">
-                    {getColumnIcon(col.type)}
-                    {col.label}
-                 </span>
-                 {groupBy === col.id && <Check size={14} />}
-             </div>
-        ))}
-    </div>
-  );
-
-  const rowHeightContent: MenuProps['items'] = [
-      { key: 'small', label: '紧凑', onClick: () => onRowHeightChange('small') },
-      { key: 'medium', label: '标准', onClick: () => onRowHeightChange('medium') },
-      { key: 'large', label: '宽松', onClick: () => onRowHeightChange('large') },
-      { key: 'extra-large', label: '超宽', onClick: () => onRowHeightChange('extra-large') },
-  ];
-
-  // Drag Handlers
-  const handleDragStart = (e: React.DragEvent, index: number) => {
-    dragSourceIndex.current = index;
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (dragSourceIndex.current === index) { setDragOverIndex(null); return; }
-    setDragOverIndex(index);
-  };
-
-  const handleDrop = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    const fromIndex = dragSourceIndex.current;
-    if (fromIndex !== null && fromIndex !== index) {
-      onColumnReorder(fromIndex, index);
-    }
-    dragSourceIndex.current = null;
-    setDragOverIndex(null);
-  };
-
-  // Helper to render rows
-  const renderRows = (rowsToRender: RowData[]) => {
-      return rowsToRender.map((row, index) => (
-        <tr key={row.id} className={`group transition-colors ${selectedRowIds.has(row.id) ? 'bg-blue-50/40 hover:bg-blue-50/60' : 'hover:bg-slate-50/50'}`}>
-            <td className="p-0 text-center border-r border-slate-200 bg-slate-50/30">
-                <div className={`w-full flex items-center justify-center ${getRowHeightClass()}`}>
-                    <Checkbox checked={selectedRowIds.has(row.id)} onChange={() => onSelectRow(row.id)} />
+  const renderRow = (row: RowData, idx: number) => (
+        <tr key={row.id} className={`group hover:bg-slate-50/50 transition-colors ${selectedRowIds.has(row.id) ? 'bg-indigo-50/30' : ''}`}>
+            <td className="border-r border-b border-slate-100 p-0 text-center relative bg-white text-slate-400 text-[10px] font-mono">
+                <div className="absolute inset-0 flex items-center justify-center group-hover:hidden">
+                    {idx + 1}
+                </div>
+                <div className="absolute inset-0 items-center justify-center hidden group-hover:flex bg-slate-50">
+                    <Checkbox checked={selectedRowIds.has(row.id)} onChange={() => onSelectRow(row.id)}/>
                 </div>
             </td>
-            <td className="bg-slate-50/30 p-0 text-center border-r border-slate-200 text-slate-400 text-xs select-none">
-                <div className={`w-full flex items-center justify-center group-hover:hidden ${getRowHeightClass()}`}>
-                    {index + 1}
-                </div>
-                <div className={`w-full flex items-center justify-center hidden group-hover:flex ${getRowHeightClass()}`}>
-                    <div className="w-4 h-4 rounded bg-slate-200 border border-slate-300 cursor-grab active:cursor-grabbing"></div>
-                </div>
-            </td>
-            {visibleColumns.map((col) => (
-                <td key={`${row.id}-${col.id}`} className={`p-0 border-r border-slate-100 relative h-full align-top ${selectedRowIds.has(row.id) ? 'bg-blue-50/20' : 'bg-white'}`}>
-                    <div className={getRowHeightClass()}>
-                         <CellRenderer row={row} col={col} onChange={onCellChange} />
-                    </div>
+            {visibleColumns.map(col => (
+                <td key={col.id} className={`border-r border-b border-slate-100 p-0 relative ${rowHeightClass}`}>
+                    {renderCell(row, col)}
                 </td>
             ))}
-            <td className="border-r border-slate-100 bg-slate-50/10"></td>
-            <td className="p-0 text-center border-b-0">
-                <div className={`w-full flex items-center justify-center ${getRowHeightClass()}`}>
-                    <button onClick={() => onDeleteRow(row.id)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all">
-                        <Trash2 size={14} />
-                    </button>
-                </div>
-            </td>
+            <td className="border-b border-slate-100 p-0"></td>
         </tr>
-      ));
-  }
+  );
 
   return (
-    <div className="flex-1 flex flex-col border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden relative">
-      
-      {/* Toolbar */}
-      <div className="flex items-center px-3 py-2 border-b border-slate-200 bg-white gap-2">
-        <Button type="primary" size="small" icon={<Plus size={14} />} onClick={onAddRow} className="bg-blue-600">
-            添加一行
-        </Button>
-        
-        <div className="h-4 w-px bg-slate-200 mx-1"></div>
-
-        <Popover content={fieldsContent} trigger="click" placement="bottomLeft">
-            <Button type="text" size="small" className={`text-slate-600 flex items-center gap-1.5 ${hiddenColumnIds.size > 0 ? 'bg-slate-100 text-slate-900' : ''}`}>
-                <Grid3X3 size={14} /> 字段管理
-            </Button>
-        </Popover>
-        
-        <div className="h-4 w-px bg-slate-200 mx-1"></div>
-
-        <Popover content={filterContent} trigger="click" placement="bottomLeft" arrow={false}>
-            <Button type="text" size="small" className={`text-slate-600 flex items-center gap-1.5 ${filters.length > 0 ? 'bg-indigo-50 text-indigo-600' : ''}`}>
-                <FilterIcon size={14} /> 筛选
-                {filters.length > 0 && <span className="bg-indigo-600 text-white text-[10px] px-1 rounded-full">{filters.length}</span>}
-            </Button>
-        </Popover>
-
-        <Popover content={groupContent} trigger="click" placement="bottomLeft">
-             <Button type="text" size="small" className={`text-slate-600 flex items-center gap-1.5 ${groupBy ? 'bg-indigo-50 text-indigo-600' : ''}`}>
-                <LayoutList size={14} /> 分组
-            </Button>
-        </Popover>
-
-        <Popover content={sortContent} trigger="click" placement="bottomLeft">
-             <Button type="text" size="small" className={`text-slate-600 flex items-center gap-1.5 ${sortRule ? 'bg-indigo-50 text-indigo-600' : ''}`}>
-                <ArrowUpDown size={14} /> 排序
-            </Button>
-        </Popover>
-
-        <div className="h-4 w-px bg-slate-200 mx-1"></div>
-
-        <Dropdown menu={{ items: rowHeightContent }} trigger={['click']}>
-            <Button type="text" size="small" className="text-slate-600 flex items-center gap-1.5">
-                <Rows size={14} /> 行高
-            </Button>
-        </Dropdown>
-      </div>
-
-      {/* Table Container */}
-      <div className="overflow-auto flex-1">
-        <table className="w-full border-collapse text-sm min-w-[900px]">
-          <thead className="sticky top-0 z-20 bg-slate-50 shadow-sm">
-            <tr className="border-b border-slate-200">
-              <th className="w-10 p-2 text-center border-r border-slate-200 bg-slate-50"><Checkbox checked={allSelected} indeterminate={indeterminate} onChange={onSelectAll} /></th>
-              <th className="w-12 p-2 text-center border-r border-slate-200 bg-slate-50 text-xs text-slate-400 font-normal select-none">#</th>
-              
-              {visibleColumns.map((col, index) => (
-                <th 
-                  key={col.id} 
-                  draggable={true}
-                  onDragStart={(e) => handleDragStart(e, index)}
-                  onDragOver={(e) => handleDragOver(e, index)}
-                  onDrop={(e) => handleDrop(e, index)}
-                  className={`group p-0 border-r border-slate-200 bg-slate-50 min-w-[160px] relative cursor-move transition-colors ${dragOverIndex === index ? 'bg-blue-50' : ''}`}
-                >
-                  {dragOverIndex === index && <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-600 z-30 pointer-events-none"></div>}
-                  <div className={`flex items-center justify-between px-3 py-2.5 text-left hover:bg-slate-100 transition-colors ${dragOverIndex === index ? 'opacity-50' : ''}`}>
-                    <div className="flex items-center gap-2 pointer-events-none">
-                        {getColumnIcon(col.type)}
-                        <span className="text-slate-700 font-medium text-xs uppercase tracking-wide truncate max-w-[100px]">{col.label}</span>
-                    </div>
-                    <div onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }} draggable={false}>
-                        <Dropdown menu={{ items: getColumnMenu(col) }} trigger={['click']} placement="bottomRight">
-                            <Button type="text" size="small" className="flex items-center justify-center text-slate-400 hover:text-slate-600" icon={<MoreHorizontal size={14} />} />
-                        </Dropdown>
-                    </div>
-                  </div>
-                </th>
-              ))}
-              
-              <th 
-                className={`w-10 p-0 border-r border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer align-middle relative ${dragOverIndex === visibleColumns.length ? 'bg-blue-50' : ''}`}
-                onDragOver={(e) => handleDragOver(e, visibleColumns.length)}
-                onDrop={(e) => handleDrop(e, visibleColumns.length)}
-              >
-                  {dragOverIndex === visibleColumns.length && <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-600 z-30 pointer-events-none"></div>}
-                  <button onClick={onAddColumn} className="w-full h-full flex items-center justify-center text-slate-400 hover:text-blue-600 py-2.5" title="添加列"><Plus size={16} /></button>
-              </th>
-              <th className="w-12 border-b border-slate-200 bg-slate-50"></th>
-            </tr>
-          </thead>
-          
-          <tbody className="divide-y divide-slate-100">
-              {!groupBy ? renderRows(rows) : groupedData?.map(([key, groupRows]) => (
-                  <React.Fragment key={key}>
-                      <tr className="bg-slate-50/80 border-b border-slate-200">
-                          <td colSpan={visibleColumns.length + 4} className="px-4 py-2">
-                              <div className="flex items-center gap-2 font-medium text-slate-700 text-xs">
-                                  <ChevronDown size={14} />
-                                  <span className="bg-slate-200 px-1.5 py-0.5 rounded text-slate-600">{columns.find(c => c.id === groupBy)?.label}: {key}</span>
-                                  <span className="text-slate-400">({groupRows.length})</span>
-                              </div>
-                          </td>
-                      </tr>
-                      {renderRows(groupRows)}
-                  </React.Fragment>
-              ))}
-          </tbody>
-        </table>
-        {rows.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-            <p>暂无数据。</p>
-            <button onClick={onAddRow} className="mt-2 text-blue-600 hover:underline">添加一行</button>
-            </div>
-        )}
-      </div>
-
-      {/* Bottom Action Bar */}
-      <div className="sticky bottom-0 p-3 bg-white border-t border-slate-200 flex items-center justify-between z-20 shadow-[0_-1px_3px_rgba(0,0,0,0.05)]">
-        {selectedRowIds.size > 0 ? (
-            <div className="flex items-center gap-3 w-full animate-in slide-in-from-bottom-2 duration-200">
-                <div className="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-md text-sm font-medium border border-indigo-100 flex items-center gap-2">
-                    <CheckSquare size={14} /> 已选择 {selectedRowIds.size} 行
+    <div className="flex-1 overflow-auto border border-slate-200 rounded-lg bg-white relative">
+      <table className="w-full border-collapse table-fixed min-w-[800px]">
+        <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+          <tr>
+            <th className="w-10 border-r border-b border-slate-200 p-0 bg-slate-50">
+                <div className="flex items-center justify-center h-full">
+                    <Checkbox 
+                        checked={rows.length > 0 && selectedRowIds.size === rows.length} 
+                        indeterminate={selectedRowIds.size > 0 && selectedRowIds.size < rows.length}
+                        onChange={onSelectAll}
+                    />
                 </div>
-                <div className="h-6 w-px bg-slate-200"></div>
-                <Button danger type="primary" icon={<Trash2 size={16} />} onClick={onDeleteSelected}>删除选中</Button>
-                <Button type="text" icon={<X size={16} />} onClick={onSelectAll} className="text-slate-500">取消选择</Button>
-            </div>
-        ) : (
-            <div className="flex items-center justify-between w-full animate-in slide-in-from-bottom-2 duration-200">
-                <Button type="primary" icon={<Plus size={16} />} onClick={onAddRow} className="shadow-sm">添加新行</Button>
-                <span className="text-xs text-slate-400 font-medium bg-slate-50 px-2 py-1 rounded border border-slate-100">{rows.length} 条记录</span>
-            </div>
-        )}
-      </div>
+            </th>
+            {visibleColumns.map(col => (
+                <th key={col.id} className="border-r border-b border-slate-200 p-0 text-left relative" style={{ width: col.width || 150 }}>
+                    {renderHeader(col)}
+                </th>
+            ))}
+            <th className="w-12 border-b border-slate-200 bg-slate-50 p-0">
+                <button 
+                    onClick={onAddColumn}
+                    className="w-full h-full flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                    title="添加新列"
+                >
+                    <Plus size={16} />
+                </button>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+            {/* Grouped Rendering */}
+            {groupBy ? (
+                Object.entries(groupedRows).map(([groupValue, groupRows]) => {
+                    const groupCol = columns.find(c => c.id === groupBy);
+                    const option = groupCol?.options?.find(o => o.label === groupValue);
+                    const colorClass = option?.color || 'bg-slate-100 text-slate-700';
+                    
+                    return (
+                        <React.Fragment key={groupValue}>
+                            <tr className="bg-slate-50/80">
+                                <td colSpan={visibleColumns.length + 2} className="px-2 py-1.5 border-b border-slate-200">
+                                    <div className="flex items-center gap-2">
+                                        <ChevronDown size={14} className="text-slate-400" />
+                                        <span className={`text-xs font-medium px-2 py-0.5 rounded-md border border-transparent ${colorClass}`}>
+                                            {groupValue}
+                                        </span>
+                                        <span className="text-xs text-slate-400 ml-1">{groupRows.length} 项</span>
+                                    </div>
+                                </td>
+                            </tr>
+                            {groupRows.map((row, idx) => renderRow(row, idx))}
+                        </React.Fragment>
+                    )
+                })
+            ) : (
+                rows.map((row, idx) => renderRow(row, idx))
+            )}
+
+            {/* Add Row Button at Bottom */}
+            <tr>
+                <td className="border-r border-b border-slate-100 bg-slate-50/30"></td>
+                <td colSpan={visibleColumns.length + 1} className="border-b border-slate-100 p-0">
+                    <button 
+                        onClick={onAddRow}
+                        className="w-full py-2 flex items-center gap-2 px-3 text-sm text-slate-400 hover:text-indigo-600 hover:bg-slate-50 transition-colors text-left group"
+                    >
+                        <Plus size={16} className="group-hover:scale-110 transition-transform"/>
+                        新建行
+                    </button>
+                </td>
+            </tr>
+        </tbody>
+      </table>
     </div>
   );
 };
 
-interface CellRendererProps {
-    row: RowData;
-    col: Column;
-    onChange: (rowId: string, colId: string, value: any) => void;
-}
+// Refined Image Cell with Preview
+const ImageCell: React.FC<{ value: any, onChange: (val: any) => void }> = ({ value, onChange }) => {
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
-const CellRenderer: React.FC<CellRendererProps> = ({ row, col, onChange }) => {
-    const value = row[col.id];
-    switch (col.type) {
-        case 'select':
-            return (
-                <Select
-                    variant="borderless"
-                    value={value || null}
-                    onChange={(val) => onChange(row.id, col.id, val)}
-                    style={{ width: '100%' }}
-                    placeholder="请选择..."
-                    className="w-full"
-                    options={col.options?.map(opt => ({ 
-                        value: opt.label, 
-                        label: <div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${opt.color.split(' ')[0]}`} /><span>{opt.label}</span></div>
-                    }))}
-                    tagRender={(props) => {
-                         const opt = col.options?.find(o => o.label === props.value);
-                         return <span className={`mr-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${opt?.color || 'bg-slate-100 text-slate-700'}`}>{props.label}</span>
-                    }}
-                />
-            );
-        case 'checkbox':
-            return (
-                <div className="w-full h-full flex items-center justify-center py-2">
-                    <Checkbox checked={!!value} onChange={(e) => onChange(row.id, col.id, e.target.checked)} />
+    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                onChange(reader.result);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    return (
+        <div className="relative group w-full h-full flex items-center justify-center bg-slate-50/20 transition-all hover:bg-slate-50/50">
+            {value ? (
+                <div className="w-full h-full p-1 flex items-center justify-center">
+                    <Image 
+                        src={value} 
+                        className="object-cover rounded-sm border border-slate-200" 
+                        style={{ width: '100%', height: '100%', maxHeight: 80, objectFit: 'cover' }}
+                        alt="Cell"
+                        preview={{
+                            mask: <span className="text-xs flex flex-col items-center gap-1"><ImageIcon size={14}/> 预览</span>
+                        }}
+                    />
                 </div>
-            );
-        case 'rating':
-            return <div className="w-full h-full flex items-center px-3 py-1.5"><Rate count={5} value={Number(value) || 0} onChange={(val) => onChange(row.id, col.id, val)} style={{ fontSize: 14, color: '#eab308' }} /></div>;
-        case 'url':
-            return (
-                 <div className="relative w-full h-full group">
-                    <Input variant="borderless" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="https://" className="w-full text-sm" />
-                    {value && <a href={value} target="_blank" rel="noreferrer" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity z-10"><LinkIcon size={12} /></a>}
-                 </div>
-            );
-        case 'person':
-            return (
-                <div className="w-full h-full px-2 py-1 flex items-center gap-2">
-                    {value && <Avatar size={20} style={{ backgroundColor: '#8b5cf6' }}>{String(value)[0]}</Avatar>}
-                    <Input variant="borderless" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="人员姓名" className="flex-1 text-sm p-0" />
-                </div>
-            );
-        case 'email':
-             return (
-                <div className="relative w-full h-full group flex items-center">
-                     <Mail size={14} className="text-slate-300 ml-2 shrink-0" />
-                     <Input variant="borderless" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="user@example.com" className="w-full text-sm" />
-                </div>
-             );
-        case 'phone':
-             return (
-                <div className="relative w-full h-full group flex items-center">
-                     <Phone size={14} className="text-slate-300 ml-2 shrink-0" />
-                     <Input variant="borderless" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="123-4567-8900" className="w-full text-sm" />
-                </div>
-             );
-        case 'location':
-             return (
-                <div className="relative w-full h-full group flex items-center">
-                     <MapPin size={14} className="text-slate-300 ml-2 shrink-0" />
-                     <Input variant="borderless" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="输入地址" className="w-full text-sm" />
-                </div>
-             );
-        case 'date':
-             const dateValue = value ? dayjs(value) : null;
-            return <DatePicker variant="borderless" value={dateValue} onChange={(_, dateString) => onChange(row.id, col.id, dateString)} style={{ width: '100%' }} allowClear={false} format="YYYY-MM-DD" placeholder="选择日期" />;
-        case 'number':
-            return <Input type="number" variant="borderless" className="text-right font-mono text-sm" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="0" />;
-        case 'image':
-             return (
-                <div className="relative w-full h-full flex items-center px-2 gap-2 group">
-                     {value ? <img src={value} alt="" className="w-6 h-6 rounded object-cover border border-slate-200 bg-slate-50" /> : <ImageIcon size={16} className="text-slate-300" />}
-                     <Input variant="borderless" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="图片链接..." className="w-full text-sm p-0" />
-                </div>
-             );
-        case 'file':
-             return (
-                <div className="relative w-full h-full flex items-center px-2 gap-2 group">
-                     <FileText size={16} className="text-slate-300" />
-                     <Input variant="borderless" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} placeholder="文件名称/链接" className="w-full text-sm p-0" />
-                </div>
-             );
-        default:
-            return <Input variant="borderless" className="text-sm" value={value || ''} onChange={(e) => onChange(row.id, col.id, e.target.value)} />;
-    }
-}
+            ) : (
+                <span className="text-slate-300 opacity-40 group-hover:opacity-80 transition-opacity pointer-events-none">
+                    <ImageIcon size={16}/>
+                </span>
+            )}
+            
+            <input 
+                type="file" 
+                ref={fileInputRef} 
+                className="hidden" 
+                accept="image/*" 
+                onChange={handleImageUpload}
+            />
+            
+            {/* Controls */}
+            <div className={`absolute right-1 top-1/2 -translate-y-1/2 flex gap-1 ${value ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity z-10`}>
+                <button 
+                    className="p-1 bg-white shadow-md rounded-full text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-all"
+                    onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                    title="上传图片"
+                >
+                    <Upload size={12} />
+                </button>
+                {value && (
+                     <button 
+                        className="p-1 bg-white shadow-md rounded-full text-slate-500 hover:text-red-500 hover:bg-red-50 transition-all"
+                        onClick={(e) => { e.stopPropagation(); onChange(''); }}
+                        title="清除"
+                     >
+                        <X size={12} />
+                     </button>
+                )}
+            </div>
+        </div>
+    );
+};
 
 export default Spreadsheet;

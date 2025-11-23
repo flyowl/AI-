@@ -1,11 +1,11 @@
+
 import React, { useState, useMemo } from 'react';
-import Spreadsheet from './components/Spreadsheet';
 import Sidebar from './components/Sidebar';
-import DataViz from './components/DataViz';
-import AddColumnModal from './components/AddColumnModal';
-import { Column, RowData, AIStatus, AnalysisResult, ColumnType, SelectOption, Filter, SortRule, RowHeight, FilterMatchType } from './types';
+import NavigationSidebar from './components/NavigationSidebar';
+import SmartSpreadsheet from './components/SmartSpreadsheet';
+import { Column, RowData, AIStatus, AnalysisResult, View, ViewType, ChatMessage, Sheet } from './types';
 import { generateSmartRows, analyzeDataset, generateSheetFromPrompt } from './services/geminiService';
-import { Sparkles, Wand2, LayoutGrid } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import { ConfigProvider, message, Modal } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import dayjs from 'dayjs';
@@ -15,353 +15,199 @@ import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 dayjs.extend(isSameOrBefore);
 dayjs.extend(isSameOrAfter);
 
-// Initial Mock Data
+// Minimal Initial Data
 const INITIAL_COLUMNS: Column[] = [
-  { id: 'col1', label: '项目名称', type: 'text' },
-  { 
-    id: 'col2', 
-    label: '状态', 
-    type: 'select',
-    options: [
-        { id: 'opt1', label: '进行中', color: 'bg-blue-100 text-blue-700' },
-        { id: 'opt2', label: '已完成', color: 'bg-green-100 text-green-700' },
-        { id: 'opt3', label: '已阻塞', color: 'bg-red-100 text-red-700' },
-        { id: 'opt4', label: '待办', color: 'bg-slate-100 text-slate-700' },
-    ]
-  },
-  { id: 'col3', label: '优先级', type: 'rating' },
-  { id: 'col4', label: '截止日期', type: 'date' },
-  { id: 'col5', label: '预算 ($)', type: 'number' },
-  { id: 'col6', label: '已批准', type: 'checkbox' },
+  { id: 'col1', label: '列 1', type: 'text' },
 ];
 
-const INITIAL_ROWS: RowData[] = [
-  { id: '1', col1: '网站重构', col2: '进行中', col3: 5, col4: '2023-11-15', col5: 12000, col6: true },
-  { id: '2', col1: '移动应用 MVP', col2: '已阻塞', col3: 4, col4: '2023-12-01', col5: 45000, col6: true },
-  { id: '3', col1: 'Q4 营销活动', col2: '待办', col3: 3, col4: '2023-10-20', col5: 8500, col6: false },
-  { id: '4', col1: '旧系统迁移', col2: '已完成', col3: 2, col4: '2023-09-15', col5: 5000, col6: true },
-  { id: '5', col1: '员工门户开发', col2: '进行中', col3: 4, col4: '2024-01-10', col5: 22000, col6: false },
-];
+const INITIAL_ROWS: RowData[] = [];
+
+const INITIAL_VIEW: View = {
+    id: 'view-1',
+    name: '主表格',
+    type: 'grid',
+    config: {
+        filters: [],
+        filterMatchType: 'and',
+        sortRule: null,
+        groupBy: null,
+        hiddenColumnIds: [],
+        rowHeight: 'medium'
+    }
+};
 
 const App: React.FC = () => {
-  const [columns, setColumns] = useState<Column[]>(INITIAL_COLUMNS);
-  const [rows, setRows] = useState<RowData[]>(INITIAL_ROWS);
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  // --- Multi-Sheet State ---
+  const [sheets, setSheets] = useState<Sheet[]>([{
+      id: 'sheet-1',
+      name: '工作表 1',
+      columns: [...INITIAL_COLUMNS],
+      rows: [],
+      views: [INITIAL_VIEW],
+      activeViewId: INITIAL_VIEW.id,
+      selectedRowIds: new Set()
+  }]);
+  const [activeSheetId, setActiveSheetId] = useState<string>('sheet-1');
+
+  // --- Derived Active Sheet Helpers ---
+  const activeSheet = useMemo(() => sheets.find(s => s.id === activeSheetId) || sheets[0], [sheets, activeSheetId]);
+  
+  const updateActiveSheet = (updater: (sheet: Sheet) => Sheet) => {
+      setSheets(prev => prev.map(s => s.id === activeSheetId ? updater(s) : s));
+  };
+
+  // Chat / AI State
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [aiStatus, setAiStatus] = useState<AIStatus>(AIStatus.IDLE);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
-  const [generatePrompt, setGeneratePrompt] = useState('');
-  const [isGeneratingSheet, setIsGeneratingSheet] = useState(false);
-  
-  // Toolbar States
-  const [filters, setFilters] = useState<Filter[]>([]);
-  const [filterMatchType, setFilterMatchType] = useState<FilterMatchType>('and');
-  const [sortRule, setSortRule] = useState<SortRule | null>(null);
-  const [groupBy, setGroupBy] = useState<string | null>(null);
-  const [rowHeight, setRowHeight] = useState<RowHeight>('medium');
-  const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(new Set());
 
-  // Modal States
-  const [isColumnModalOpen, setIsColumnModalOpen] = useState(false);
-  const [editingColumn, setEditingColumn] = useState<Column | null>(null);
-
-  // Derived Data
-  const processedRows = useMemo(() => {
-    let result = [...rows];
-
-    // 1. Filter
-    if (filters.length > 0) {
-        const filterFunc = (row: RowData) => {
-             const checkFilter = (filter: Filter) => {
-                const col = columns.find(c => c.id === filter.columnId);
-                if (!col) return true;
-
-                const rowValue = row[filter.columnId];
-                const filterValue = filter.value;
-
-                // Handle Empty Checks first
-                if (filter.operator === 'isEmpty') {
-                    return rowValue === null || rowValue === undefined || rowValue === '';
-                }
-                if (filter.operator === 'isNotEmpty') {
-                    return rowValue !== null && rowValue !== undefined && rowValue !== '';
-                }
-
-                // Type specific checks
-                if (col.type === 'date') {
-                    // Allow flexible date parsing
-                    const rowDate = dayjs(rowValue);
-                    const filterDate = dayjs(filterValue);
-                    
-                    // If row has no valid date, it shouldn't match date logic unless operator checks for inequality might handle nulls differently?
-                    // Usually spreadsheets exclude invalid dates from date filters
-                    if (!rowDate.isValid()) return false; 
-                    if (!filterDate.isValid()) return true; // If filter is invalid, ignore or match all? Usually ignore filter. Here we assume filter is valid if set.
-
-                    switch(filter.operator) {
-                        case 'isSame': return rowDate.isSame(filterDate, 'day');
-                        case 'isBefore': return rowDate.isBefore(filterDate, 'day');
-                        case 'isAfter': return rowDate.isAfter(filterDate, 'day');
-                        default: return false;
-                    }
-                }
-
-                if (col.type === 'number' || col.type === 'rating') {
-                    const rNum = Number(rowValue);
-                    const fNum = Number(filterValue);
-                    
-                    // If row value is not a number (e.g. empty string), it shouldn't match numeric filters typically
-                    if (rowValue === '' || rowValue === null || rowValue === undefined || isNaN(rNum)) return false;
-                    if (isNaN(fNum)) return true; // Ignore invalid filter
-
-                    switch(filter.operator) {
-                        case 'equals': return rNum === fNum;
-                        case 'gt': return rNum > fNum;
-                        case 'lt': return rNum < fNum;
-                        case 'gte': return rNum >= fNum;
-                        case 'lte': return rNum <= fNum;
-                        default: return false;
-                    }
-                }
-
-                // Default String/Select/etc comparison
-                const strRow = String(rowValue ?? '').toLowerCase();
-                const strFilter = String(filterValue ?? '').toLowerCase();
-
-                switch(filter.operator) {
-                    case 'contains': return strRow.includes(strFilter);
-                    case 'doesNotContain': return !strRow.includes(strFilter);
-                    case 'equals': return strRow === strFilter;
-                    default: return strRow.includes(strFilter);
-                }
-             };
-
-             if (filterMatchType === 'and') {
-                 return filters.every(checkFilter);
-             } else {
-                 return filters.some(checkFilter);
-             }
-        };
-
-        result = result.filter(filterFunc);
-    }
-
-    // 2. Sort
-    if (sortRule) {
-        result.sort((a, b) => {
-            const valA = a[sortRule.columnId];
-            const valB = b[sortRule.columnId];
-
-            if (valA === valB) return 0;
-            if (valA === null || valA === undefined || valA === '') return 1; 
-            if (valB === null || valB === undefined || valB === '') return -1;
-
-            if (typeof valA === 'number' && typeof valB === 'number') {
-                return sortRule.direction === 'asc' ? valA - valB : valB - valA;
-            }
-            
-            const strA = String(valA).toLowerCase();
-            const strB = String(valB).toLowerCase();
-            if (strA < strB) return sortRule.direction === 'asc' ? -1 : 1;
-            return sortRule.direction === 'asc' ? 1 : -1;
-        });
-    }
-
-    return result;
-  }, [rows, filters, sortRule, columns, filterMatchType]);
-
-  // Handlers
-  const handleCellChange = (rowId: string, colId: string, value: any) => {
-    setRows(prev => prev.map(row => 
-      row.id === rowId ? { ...row, [colId]: value } : row
-    ));
-  };
-
-  const handleDeleteRow = (rowId: string) => {
-    setRows(prev => prev.filter(row => row.id !== rowId));
-    if (selectedRowIds.has(rowId)) {
-        const newSet = new Set(selectedRowIds);
-        newSet.delete(rowId);
-        setSelectedRowIds(newSet);
-    }
-    message.success('行已删除');
-  };
-
-  const handleAddRow = () => {
-    const newId = crypto.randomUUID();
-    const newRow: RowData = { id: newId };
-    columns.forEach(c => {
-        if(c.type === 'checkbox') newRow[c.id] = false;
-        else newRow[c.id] = '';
-    });
-    setRows(prev => [...prev, newRow]);
-  };
-
-  // Selection Handlers
-  const handleSelectRow = (id: string) => {
-    const newSet = new Set(selectedRowIds);
-    if (newSet.has(id)) {
-        newSet.delete(id);
-    } else {
-        newSet.add(id);
-    }
-    setSelectedRowIds(newSet);
-  };
-
-  const handleSelectAll = () => {
-    // Only select visible rows
-    if (selectedRowIds.size === processedRows.length && processedRows.length > 0) {
-        setSelectedRowIds(new Set());
-    } else {
-        setSelectedRowIds(new Set(processedRows.map(r => r.id)));
-    }
-  };
-
-  const handleDeleteSelected = () => {
-    Modal.confirm({
-        title: '确认删除',
-        content: `确定要删除选中的 ${selectedRowIds.size} 行数据吗？此操作无法撤销。`,
-        okText: '删除选中',
-        okType: 'danger',
-        cancelText: '取消',
-        onOk: () => {
-            setRows(prev => prev.filter(r => !selectedRowIds.has(r.id)));
-            setSelectedRowIds(new Set());
-            message.success(`已删除 ${selectedRowIds.size} 行数据`);
-        }
-    });
-  };
-
-  const handleSaveColumn = (name: string, type: ColumnType, options?: SelectOption[]) => {
-    if (editingColumn) {
-        // Update existing
-        setColumns(prev => prev.map(col => 
-            col.id === editingColumn.id ? { ...col, label: name, type, options } : col
-        ));
-        setEditingColumn(null);
-        message.success('列已更新');
-    } else {
-        // Add new
-        const newCol: Column = {
-            id: crypto.randomUUID(),
-            label: name,
-            type,
-            options
-        };
-        setColumns(prev => [...prev, newCol]);
-        message.success('列已创建');
-    }
-  };
-
-  const handleEditColumn = (col: Column) => {
-      setEditingColumn(col);
-      setIsColumnModalOpen(true);
-  };
-
-  const handleDeleteColumn = (colId: string) => {
-      setColumns(prev => prev.filter(c => c.id !== colId));
-      // Also clean up filters/sorts/group using this column
-      setFilters(prev => prev.filter(f => f.columnId !== colId));
-      if (sortRule?.columnId === colId) setSortRule(null);
-      if (groupBy === colId) setGroupBy(null);
-      setHiddenColumnIds(prev => {
-          const next = new Set(prev);
-          next.delete(colId);
-          return next;
-      });
-      message.success('列已删除');
-  };
-
-  const handleDuplicateColumn = (colId: string) => {
-      const col = columns.find(c => c.id === colId);
-      if (!col) return;
-      
-      const newId = crypto.randomUUID();
-      const newCol: Column = {
-          ...col,
-          id: newId,
-          label: `${col.label} (副本)`
+  // --- View Management Handlers ---
+  const handleCreateView = (name: string, type: ViewType) => {
+      const newView: View = {
+          id: crypto.randomUUID(),
+          name,
+          type,
+          config: { ...INITIAL_VIEW.config } 
       };
-
-      const idx = columns.findIndex(c => c.id === colId);
-      const newCols = [...columns];
-      newCols.splice(idx + 1, 0, newCol);
-      setColumns(newCols);
-
-      setRows(prev => prev.map(row => ({
-          ...row,
-          [newId]: row[colId] 
-      })));
-      message.success('列已复制');
+      updateActiveSheet(sheet => ({
+          ...sheet,
+          views: [...sheet.views, newView],
+          activeViewId: newView.id
+      }));
+      message.success('视图已创建');
   };
 
-  const handleColumnReorder = (fromIndex: number, toIndex: number) => {
-      if (fromIndex === toIndex) return;
-      setColumns(prev => {
-          const newCols = [...prev];
-          const [movedCol] = newCols.splice(fromIndex, 1);
-          const targetIndex = toIndex > fromIndex ? toIndex - 1 : toIndex;
-          newCols.splice(targetIndex, 0, movedCol);
-          return newCols;
+  const handleDeleteView = (viewId: string) => {
+      updateActiveSheet(sheet => {
+          if (sheet.views.length <= 1) { message.warning('至少保留一个视图'); return sheet; }
+          const newViews = sheet.views.filter(v => v.id !== viewId);
+          return {
+              ...sheet,
+              views: newViews,
+              activeViewId: sheet.activeViewId === viewId ? newViews[0].id : sheet.activeViewId
+          };
       });
   };
 
-  // AI Handlers
-  const handleSmartFill = async () => {
-    setAiStatus(AIStatus.LOADING);
-    try {
-      // Generating 100 rows as requested
-      const newRows = await generateSmartRows(columns, rows, 100);
-      setRows(prev => [...prev, ...newRows]);
-      setAiStatus(AIStatus.SUCCESS);
-      message.success('已生成 100 行新数据');
-    } catch (error) {
-      console.error(error);
-      setAiStatus(AIStatus.ERROR);
-      message.error('生成数据失败');
-    }
+  const handleSwitchView = (viewId: string) => {
+      updateActiveSheet(sheet => ({ ...sheet, activeViewId: viewId }));
   };
 
-  const handleAnalyze = async () => {
-    setAiStatus(AIStatus.LOADING);
-    try {
-      const result = await analyzeDataset(columns, processedRows); // Analyze visible data
-      setAnalysis(result);
-      setAiStatus(AIStatus.SUCCESS);
-      message.success('分析完成');
-    } catch (error) {
-      console.error(error);
-      setAiStatus(AIStatus.ERROR);
-      message.error('分析失败');
-    }
+  // --- Sheet Management Handlers ---
+  const handleAddSheet = () => {
+      const newSheet: Sheet = {
+          id: crypto.randomUUID(),
+          name: `工作表 ${sheets.length + 1}`,
+          columns: [{ id: crypto.randomUUID(), label: '列 1', type: 'text' }],
+          rows: [],
+          views: [{ ...INITIAL_VIEW, id: crypto.randomUUID() }],
+          activeViewId: INITIAL_VIEW.id, // This might be buggy if IDs are not unique in the View object but INITIAL_VIEW has a static ID. Let's fix that in initialization.
+          selectedRowIds: new Set()
+      };
+      // Fix activeViewId reference for the new sheet
+      newSheet.activeViewId = newSheet.views[0].id;
+
+      setSheets([...sheets, newSheet]);
+      setActiveSheetId(newSheet.id);
+      message.success('新工作表已创建');
   };
 
-  const handleGenerateSheet = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!generatePrompt.trim()) return;
-    
-    setIsGeneratingSheet(true);
-    setAiStatus(AIStatus.LOADING);
-    try {
-      const { columns: newCols, rows: newRows } = await generateSheetFromPrompt(generatePrompt);
-      setColumns(newCols);
-      setRows(newRows);
-      setSelectedRowIds(new Set());
-      setAnalysis(null); 
-      setFilters([]);
-      setSortRule(null);
-      setGroupBy(null);
-      setHiddenColumnIds(new Set());
-      setGeneratePrompt('');
-      setAiStatus(AIStatus.SUCCESS);
-      message.success('表格生成成功');
-    } catch (error) {
-      console.error(error);
-      setAiStatus(AIStatus.ERROR);
-      message.error('表格生成失败');
-    } finally {
-      setIsGeneratingSheet(false);
-    }
+  const handleDeleteSheet = (id: string) => {
+      if (sheets.length <= 1) {
+          message.warning('至少需要保留一个工作表');
+          return;
+      }
+      Modal.confirm({
+          title: '删除工作表',
+          content: '确定要删除这个工作表吗？此操作无法撤销。',
+          okType: 'danger',
+          onOk: () => {
+              const newSheets = sheets.filter(s => s.id !== id);
+              setSheets(newSheets);
+              if (activeSheetId === id) setActiveSheetId(newSheets[0].id);
+              message.success('工作表已删除');
+          }
+      })
+  };
+
+  const handleRenameSheet = (id: string) => {
+      const sheet = sheets.find(s => s.id === id);
+      if(!sheet) return;
+      let newName = sheet.name;
+      Modal.confirm({
+          title: '重命名工作表',
+          content: <input className="w-full border p-2 rounded" defaultValue={sheet.name} onChange={e => newName = e.target.value} autoFocus />,
+          onOk: () => {
+              if(newName.trim()) {
+                  setSheets(prev => prev.map(s => s.id === id ? { ...s, name: newName } : s));
+              }
+          }
+      });
+  };
+
+  // --- AI & Generation ---
+  const addMessage = (role: 'user' | 'ai', content: string) => {
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role, content, timestamp: Date.now() }]);
+  };
+
+  const executeAiAction = async (action: 'fill' | 'analyze' | 'chat', payload?: string) => {
+      setAiStatus(AIStatus.LOADING);
+      try {
+          if (action === 'fill') {
+              const newRows = await generateSmartRows(activeSheet.columns, activeSheet.rows, 50);
+              updateActiveSheet(sheet => ({ ...sheet, rows: [...sheet.rows, ...newRows] }));
+              addMessage('ai', '✅ 已为您智能填充 50 行新数据。');
+          } else if (action === 'analyze') {
+              const result = await analyzeDataset(activeSheet.columns, activeSheet.rows);
+              setAnalysis(result);
+              addMessage('ai', `📊 分析完成！\n\n**摘要**: ${result.summary}\n\n**关键趋势**:\n${result.keyTrends.map(t => `- ${t}`).join('\n')}\n\n建议图表: ${result.suggestedChartType}。`);
+          } else if (action === 'chat' && payload) {
+             // Heuristic check for Create/Generate intent
+             const lowerPrompt = payload.toLowerCase();
+             const isCreationRequest = /(生成|创建|建一个|make|create|generate)/.test(lowerPrompt) && /(表|单|list|sheet|table)/.test(lowerPrompt);
+
+             if (isCreationRequest) {
+                 addMessage('ai', '正在为您生成数据表，请稍候...');
+                 const { columns, rows } = await generateSheetFromPrompt(payload);
+                 
+                 // Determine a name from prompt or default
+                 let sheetName = "AI 生成表格";
+                 const match = payload.match(/(?:关于|for)\s*(.+)/);
+                 if(match) sheetName = match[1].slice(0, 10);
+                 
+                 const newSheet: Sheet = {
+                     id: crypto.randomUUID(),
+                     name: sheetName,
+                     columns: columns,
+                     rows: rows,
+                     views: [INITIAL_VIEW],
+                     activeViewId: INITIAL_VIEW.id,
+                     selectedRowIds: new Set()
+                 };
+                 
+                 setSheets(prev => [...prev, newSheet]);
+                 setActiveSheetId(newSheet.id);
+                 addMessage('ai', `✅ 已成功创建“${sheetName}”，包含 ${columns.length} 个字段和 ${rows.length} 条示例数据。`);
+             } else if (payload.includes('填充') || payload.includes('数据')) {
+                 await executeAiAction('fill');
+             } else if (payload.includes('分析') || payload.includes('图表')) {
+                 await executeAiAction('analyze');
+             } else {
+                 // Generic Chat Response
+                 setTimeout(() => {
+                      addMessage('ai', '收到。我可以帮您：\n1. 生成全新的数据表 (例如: "生成一个CRM客户列表")\n2. 填充当前表格数据\n3. 分析当前数据趋势');
+                      setAiStatus(AIStatus.SUCCESS);
+                 }, 800);
+                 return;
+             }
+          }
+          setAiStatus(AIStatus.SUCCESS);
+      } catch (error) {
+          console.error(error);
+          setAiStatus(AIStatus.ERROR);
+          addMessage('ai', '抱歉，执行任务时遇到了问题，请重试。');
+      }
   };
 
   return (
@@ -376,115 +222,77 @@ const App: React.FC = () => {
       }}
     >
       <div className="flex h-screen w-screen bg-slate-50 text-slate-900 overflow-hidden font-sans">
-        {/* Main Content Area */}
+        
+        {/* Left Navigation Sidebar */}
+        <NavigationSidebar 
+            sheets={sheets}
+            activeSheetId={activeSheetId}
+            onSwitchSheet={setActiveSheetId}
+            onAddSheet={handleAddSheet}
+            onRenameSheet={handleRenameSheet}
+            onDeleteSheet={handleDeleteSheet}
+        />
+
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           {/* Header */}
-          <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 shadow-sm z-20">
-            <div className="flex items-center gap-2">
-              <div className="bg-indigo-600 text-white p-1.5 rounded-md shadow-sm">
-                <LayoutGrid size={18} />
-              </div>
-              <h1 className="text-lg font-bold text-slate-800 tracking-tight">AI 智能表格</h1>
-              <div className="h-5 w-px bg-slate-200 mx-2"></div>
-              <span className="text-xs font-medium px-2 py-1 bg-slate-100 rounded text-slate-500">项目追踪</span>
+          <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 shadow-sm z-20 shrink-0">
+            <div className="flex items-center gap-3">
+              <h1 className="text-lg font-bold text-slate-800 tracking-tight">{activeSheet.name}</h1>
             </div>
             
-            {/* Generator Bar */}
-            <form onSubmit={handleGenerateSheet} className="flex-1 max-w-xl mx-8 relative group">
-               <input 
-                type="text" 
-                value={generatePrompt}
-                onChange={(e) => setGeneratePrompt(e.target.value)}
-                placeholder="让 AI 生成表格 (例如 '包含状态、平台、日期的社交媒体内容日历')"
-                className="w-full pl-9 pr-20 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none text-sm transition-all"
-               />
-               <Wand2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
-               <button 
-                  type="submit" 
-                  disabled={isGeneratingSheet || !generatePrompt}
-                  className="absolute right-1 top-1 bottom-1 bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded-md text-xs font-medium disabled:opacity-50 transition-colors shadow-sm"
-               >
-                 {isGeneratingSheet ? '生成中...' : '生成'}
-               </button>
-            </form>
+            <div className="flex-1"></div>
 
-            <button 
-              onClick={() => setShowSidebar(!showSidebar)}
-              className={`p-1.5 rounded-md transition-colors border border-transparent ${showSidebar ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'text-slate-500 hover:bg-slate-100'}`}
-            >
-              <Sparkles size={18} />
-            </button>
+            <div className="flex items-center gap-2">
+                <span className="text-xs font-medium px-2 py-1 bg-slate-100 rounded text-slate-500 border border-slate-200">
+                  视图: {activeSheet.views.find(v => v.id === activeSheet.activeViewId)?.name}
+                </span>
+                <button 
+                    onClick={() => setShowSidebar(!showSidebar)}
+                    className={`p-1.5 rounded-md transition-colors border border-transparent ${showSidebar ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'text-slate-500 hover:bg-slate-100'}`}
+                >
+                    <Sparkles size={18} />
+                </button>
+            </div>
           </header>
 
-          {/* Content */}
-          <main className="flex-1 flex overflow-hidden p-4 gap-4 bg-slate-50/50">
-            <div className="flex-1 flex flex-col gap-4 overflow-hidden min-w-0">
-              <Spreadsheet 
-                columns={columns} 
-                rows={processedRows} // Pass processed rows
-                selectedRowIds={selectedRowIds}
-                filters={filters}
-                filterMatchType={filterMatchType}
-                sortRule={sortRule}
-                groupBy={groupBy}
-                rowHeight={rowHeight}
-                hiddenColumnIds={hiddenColumnIds}
-                onCellChange={handleCellChange}
-                onDeleteRow={handleDeleteRow}
-                onAddRow={handleAddRow}
-                onSelectRow={handleSelectRow}
-                onSelectAll={handleSelectAll}
-                onDeleteSelected={handleDeleteSelected}
-                onAddColumn={() => {
-                    setEditingColumn(null);
-                    setIsColumnModalOpen(true);
-                }}
-                onEditColumn={handleEditColumn}
-                onColumnReorder={handleColumnReorder}
-                onSortColumn={(colId, direction) => setSortRule({ columnId: colId, direction })}
-                onDeleteColumn={handleDeleteColumn}
-                onDuplicateColumn={handleDuplicateColumn}
-                onFiltersChange={setFilters}
-                onFilterMatchTypeChange={setFilterMatchType}
-                onSortRuleChange={setSortRule}
-                onGroupByChange={setGroupBy}
-                onRowHeightChange={setRowHeight}
-                onHiddenColumnIdsChange={setHiddenColumnIds}
-              />
-              
-              {/* Chart Section */}
-              {analysis && (
-                <div className="flex-shrink-0 h-72 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <DataViz 
-                    data={processedRows} 
-                    columns={columns} 
-                    chartType={analysis.suggestedChartType} 
-                  />
-                </div>
-              )}
-            </div>
+          {/* Main Content Area */}
+          <main className="flex-1 flex overflow-hidden p-0 bg-slate-50/50 relative">
+            {/* 
+              SmartSpreadsheet Component
+              Encapsulates: Toolbar, Table/Kanban/Gallery Views, Filters, Sorting, Logic 
+            */}
+            <SmartSpreadsheet 
+                columns={activeSheet.columns}
+                rows={activeSheet.rows}
+                views={activeSheet.views}
+                activeViewId={activeSheet.activeViewId}
+                selectedRowIds={activeSheet.selectedRowIds}
+                analysisResult={analysis}
+                
+                // State Updates via Callbacks
+                onRowsChange={(newRows) => updateActiveSheet(s => ({ ...s, rows: newRows }))}
+                onColumnsChange={(newCols) => updateActiveSheet(s => ({ ...s, columns: newCols }))}
+                onViewsChange={(newViews) => updateActiveSheet(s => ({ ...s, views: newViews }))}
+                onActiveViewChange={(id) => updateActiveSheet(s => ({ ...s, activeViewId: id }))}
+                onSelectionChange={(newSet) => updateActiveSheet(s => ({ ...s, selectedRowIds: newSet }))}
+            />
 
-            {/* Sidebar Toggle Animation Wrapper */}
-            <div className={`transition-all duration-300 ease-in-out ${showSidebar ? 'w-80 mr-0' : 'w-0 -mr-4 opacity-0 overflow-hidden'}`}>
+            {/* Right Sidebar (Chat) */}
+            <div className={`transition-all duration-300 ease-in-out border-l border-slate-200 bg-white ${showSidebar ? 'w-96' : 'w-0 opacity-0 overflow-hidden'}`}>
                <Sidebar 
-                 analysis={analysis}
+                 messages={messages}
                  status={aiStatus}
-                 onAnalyze={handleAnalyze}
-                 onGenerateMore={handleSmartFill}
+                 onSendMessage={(text) => { addMessage('user', text); executeAiAction('chat', text); }}
+                 onQuickAction={(action) => { addMessage('user', action === 'fill' ? '智能填充' : '分析数据'); executeAiAction(action); }}
+                 views={activeSheet.views}
+                 activeViewId={activeSheet.activeViewId}
+                 onSwitchView={handleSwitchView}
+                 onCreateView={handleCreateView}
+                 onDeleteView={handleDeleteView}
                />
             </div>
           </main>
         </div>
-
-        <AddColumnModal 
-          isOpen={isColumnModalOpen} 
-          onClose={() => {
-              setIsColumnModalOpen(false);
-              setEditingColumn(null);
-          }} 
-          onSave={handleSaveColumn} 
-          initialData={editingColumn}
-        />
       </div>
     </ConfigProvider>
   );
