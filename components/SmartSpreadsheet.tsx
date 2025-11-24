@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
-import { Column, RowData, View, AnalysisResult, ColumnType, SelectOption } from '../types';
+import { Column, RowData, View, AnalysisResult, ColumnType, SelectOption, Sheet } from '../types';
 import Spreadsheet from './Spreadsheet';
 import KanbanBoard from './KanbanBoard';
 import GalleryGrid from './GalleryGrid';
@@ -13,12 +13,15 @@ import { Trash2, Copy, X } from 'lucide-react';
 import dayjs from 'dayjs';
 
 interface SmartSpreadsheetProps {
+  sheetId: string; // Current Sheet ID
+  sheetName: string; // Current Sheet Name
   columns: Column[];
   rows: RowData[];
   views: View[];
   activeViewId: string;
   selectedRowIds: Set<string>;
   analysisResult?: AnalysisResult | null;
+  allSheets: Sheet[]; // Needed for context
   
   // State Callbacks (Controlled Component Pattern)
   onRowsChange: (newRows: RowData[]) => void;
@@ -26,20 +29,27 @@ interface SmartSpreadsheetProps {
   onViewsChange: (newViews: View[]) => void;
   onActiveViewChange: (viewId: string) => void;
   onSelectionChange: (newSet: Set<string>) => void;
+  
+  // Update other sheets (for bidirectional binding)
+  onUpdateOtherSheet: (sheetId: string, updater: (s: Sheet) => Sheet) => void;
 }
 
 const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
+  sheetId,
+  sheetName,
   columns,
   rows,
   views,
   activeViewId,
   selectedRowIds,
   analysisResult,
+  allSheets,
   onRowsChange,
   onColumnsChange,
   onViewsChange,
   onActiveViewChange,
-  onSelectionChange
+  onSelectionChange,
+  onUpdateOtherSheet
 }) => {
   // --- Local UI State ---
   const [searchTerm, setSearchTerm] = useState('');
@@ -161,13 +171,65 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
 
   // Data Operations
   const handleCellChange = (rowId: string, colId: string, value: any) => {
+      // 1. Update current sheet
       const newRows = rows.map(row => row.id === rowId ? { ...row, [colId]: value } : row);
       onRowsChange(newRows);
+
+      // 2. Handle Bidirectional Updates if it's a Relation Column
+      const col = columns.find(c => c.id === colId);
+      if (col?.type === 'relation' && col.relationConfig) {
+          const targetSheetId = col.relationConfig.targetSheetId;
+          const targetSheet = allSheets.find(s => s.id === targetSheetId);
+          
+          if (targetSheet) {
+             // Find the corresponding column in the target sheet that points back to THIS sheet
+             // We look for a column that has targetSheetId === currentSheetId
+             const backLinkCol = targetSheet.columns.find(c => 
+                 c.type === 'relation' && c.relationConfig?.targetSheetId === sheetId
+             );
+
+             if (backLinkCol) {
+                 // value is Array of IDs (e.g., ['target_row_1', 'target_row_2'])
+                 const selectedTargetRowIds = Array.isArray(value) ? value : [];
+                 
+                 onUpdateOtherSheet(targetSheetId, (prevSheet) => {
+                     const updatedRows = prevSheet.rows.map(targetRow => {
+                         let currentRelations = targetRow[backLinkCol.id];
+                         if (!Array.isArray(currentRelations)) currentRelations = [];
+
+                         // Check if this target row is one of the newly selected ones
+                         const isSelected = selectedTargetRowIds.includes(targetRow.id);
+                         const isAlreadyLinked = currentRelations.includes(rowId);
+
+                         if (isSelected && !isAlreadyLinked) {
+                             // Add link
+                             return { ...targetRow, [backLinkCol.id]: [...currentRelations, rowId] };
+                         } else if (!isSelected && isAlreadyLinked) {
+                             // Remove link (it was deselected in the source)
+                             return { ...targetRow, [backLinkCol.id]: currentRelations.filter((id: string) => id !== rowId) };
+                         }
+                         
+                         return targetRow;
+                     });
+                     return { ...prevSheet, rows: updatedRows };
+                 });
+             }
+          }
+      }
   };
 
   const handleRowUpdate = (rowId: string, updates: Record<string, any>) => {
       const newRows = rows.map(row => row.id === rowId ? { ...row, ...updates } : row);
       onRowsChange(newRows);
+
+      // Simple Iteration to check for relation updates
+      Object.keys(updates).forEach(key => {
+          const col = columns.find(c => c.id === key);
+          if (col?.type === 'relation') {
+              handleCellChange(rowId, key, updates[key]);
+          }
+      });
+
       message.success('行数据已更新');
   };
 
@@ -189,6 +251,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       const newSelected = new Set(selectedRowIds);
       newSelected.delete(rowId);
       onSelectionChange(newSelected);
+      
       message.success('行已删除');
   };
 
@@ -210,7 +273,12 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       
       // Insert them at the end
       onRowsChange([...rows, ...newRows]);
-      onSelectionChange(new Set());
+      
+      // Select the newly duplicated rows
+      const nextSelected = new Set<string>();
+      newRows.forEach(r => nextSelected.add(r.id));
+      
+      onSelectionChange(nextSelected);
       message.success(`已复制 ${rowsToDuplicate.length} 行数据`);
   };
 
@@ -229,16 +297,52 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   // Column Operations
-  const handleSaveColumn = (name: string, type: ColumnType, options?: SelectOption[]) => {
+  const handleSaveColumn = (name: string, type: ColumnType, options?: SelectOption[], targetSheetId?: string) => {
     if (editingColumn) {
-        const newCols = columns.map(col => col.id === editingColumn.id ? { ...col, label: name, type, options } : col);
+        // Edit Mode
+        const newCols = columns.map(col => col.id === editingColumn.id ? { 
+            ...col, 
+            label: name, 
+            type, 
+            options,
+            relationConfig: targetSheetId ? { targetSheetId } : undefined
+        } : col);
         onColumnsChange(newCols);
         setEditingColumn(null);
         message.success('列已更新');
     } else {
-        const newCol: Column = { id: crypto.randomUUID(), label: name, type, options };
+        // Create Mode
+        const newColId = crypto.randomUUID();
+        const newCol: Column = { 
+            id: newColId, 
+            label: name, 
+            type, 
+            options,
+            relationConfig: targetSheetId ? { targetSheetId } : undefined
+        };
         onColumnsChange([...columns, newCol]);
-        message.success('列已创建');
+
+        // --- Bidirectional Column Creation ---
+        if (type === 'relation' && targetSheetId) {
+            onUpdateOtherSheet(targetSheetId, (targetSheet) => {
+                // Check if already exists to avoid dupes (optional, but good practice)
+                // We create a "Linked to [This Sheet Name]" column
+                const backLinkLabel = `关联 ${sheetName}`;
+                const newBackCol: Column = {
+                    id: crypto.randomUUID(),
+                    label: backLinkLabel,
+                    type: 'relation',
+                    relationConfig: { targetSheetId: sheetId }
+                };
+                return {
+                    ...targetSheet,
+                    columns: [...targetSheet.columns, newBackCol]
+                };
+            });
+            message.success(`已在目标表中自动创建对应关联列`);
+        } else {
+            message.success('列已创建');
+        }
     }
   };
 
@@ -309,6 +413,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     groupBy={activeView.config.groupBy}
                     rowHeight={activeView.config.rowHeight}
                     hiddenColumnIds={new Set(activeView.config.hiddenColumnIds)}
+                    allSheets={allSheets}
                     onCellChange={handleCellChange}
                     onDeleteRow={handleDeleteRow}
                     onAddRow={handleAddRow}
@@ -421,6 +526,8 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
        {/* Modals */}
        <AddColumnModal 
           isOpen={isColumnModalOpen} 
+          currentSheetId={sheetId}
+          allSheets={allSheets}
           onClose={() => {
               setIsColumnModalOpen(false);
               setEditingColumn(null);
@@ -452,6 +559,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
             rowData={detailRowId ? rows.find(r => r.id === detailRowId) || null : null}
             columns={columns}
             onSave={handleRowUpdate}
+            allSheets={allSheets}
         />
     </div>
   );

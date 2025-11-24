@@ -1,15 +1,15 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { AnalysisResult, AIStatus, ChatMessage, View, ViewType, Sheet } from '../types';
-import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, MessageSquare, Table2 } from 'lucide-react';
-import { Tabs, Input, Button, Avatar, List, Modal, Form, Select, Badge } from 'antd';
+import { AIStatus, ChatMessage, View, ViewType, Sheet } from '../types';
+import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, Table2 } from 'lucide-react';
+import { Tabs, Input, Button, Modal, Select } from 'antd';
 
 interface SidebarProps {
   // Chat Props
   messages: ChatMessage[];
   status: AIStatus;
   onSendMessage: (text: string, targetSheetId?: string) => void;
-  onQuickAction: (action: 'fill' | 'analyze') => void;
+  onQuickAction: (action: 'fill' | 'analyze', targetSheetId?: string) => void;
   
   // Context Props
   sheets: Sheet[];
@@ -37,12 +37,15 @@ const Sidebar: React.FC<SidebarProps> = ({
   // Target sheet for AI Context
   const [targetSheetId, setTargetSheetId] = useState<string>(activeSheetId);
 
-  // Sync target sheet with active sheet unless AI is busy
+  // Sync target sheet with active sheet unless AI is busy, but allow manual override
   useEffect(() => {
-    if (status !== AIStatus.LOADING) {
+    // Only auto-switch if the current target is no longer valid or we want to follow user navigation
+    // The requirement says "bound to operation object", which usually means the active one.
+    // We update it when activeSheetId changes.
+    if (sheets.find(s => s.id === activeSheetId && s.type === 'sheet')) {
         setTargetSheetId(activeSheetId);
     }
-  }, [activeSheetId, status]);
+  }, [activeSheetId, sheets]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -70,6 +73,9 @@ const Sidebar: React.FC<SidebarProps> = ({
       }
   }
 
+  // Filter only actual sheets for the dropdown
+  const validSheets = sheets.filter(s => s.type === 'sheet');
+
   const items = [
     {
       key: 'chat',
@@ -83,7 +89,11 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-3 text-indigo-600">
                             <Bot size={24} />
                         </div>
-                        <p className="text-slate-500 text-sm">你好！我是你的智能表格助手。<br/>我可以帮你生成数据、分析趋势。</p>
+                        <p className="text-slate-500 text-sm">你好！我是你的智能表格助手。<br/>我可以帮你生成数据、分析趋势，或者创建新表。</p>
+                        <div className="mt-4 flex flex-col gap-2 text-xs text-indigo-500">
+                            <span className="cursor-pointer hover:underline" onClick={() => setInput('帮我创建一个运维管理表')}>“帮我创建一个运维管理表”</span>
+                            <span className="cursor-pointer hover:underline" onClick={() => setInput('给当前表添加一列状态')}>“给当前表添加一列状态”</span>
+                        </div>
                     </div>
                 )}
                 
@@ -122,44 +132,51 @@ const Sidebar: React.FC<SidebarProps> = ({
              {/* Quick Actions & Input */}
              <div className="p-4 bg-white border-t border-slate-200">
                 {/* Target Sheet Selector */}
-                <div className="mb-2 flex items-center gap-2">
-                     <span className="text-xs text-slate-400">操作对象:</span>
+                <div className="mb-3 flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                     <span className="text-xs text-slate-500 whitespace-nowrap">操作对象:</span>
                      <Select
                         size="small"
                         value={targetSheetId}
                         onChange={setTargetSheetId}
                         className="flex-1"
-                        variant="filled"
-                        options={sheets.map(s => ({ 
-                            label: <span className="flex items-center gap-1"><Table2 size={12}/> {s.name}</span>, 
+                        variant="borderless"
+                        options={validSheets.map(s => ({ 
+                            label: <span className="flex items-center gap-2"><Table2 size={14} className="text-indigo-500"/> {s.name}</span>, 
                             value: s.id 
                         }))}
+                        popupMatchSelectWidth={false}
                      />
                 </div>
 
                 {messages.length < 2 && (
                     <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
-                        <button onClick={() => onQuickAction('fill')} className="whitespace-nowrap px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-medium border border-indigo-100 hover:bg-indigo-100 transition-colors">
-                            ✨ 智能填充 100 行
+                        <button onClick={() => onQuickAction('fill', targetSheetId)} className="whitespace-nowrap px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-medium border border-indigo-100 hover:bg-indigo-100 transition-colors">
+                            ✨ 智能填充
                         </button>
-                        <button onClick={() => onQuickAction('analyze')} className="whitespace-nowrap px-3 py-1.5 bg-green-50 text-green-700 rounded-full text-xs font-medium border border-green-100 hover:bg-green-100 transition-colors">
-                            📊 分析当前数据
+                        <button onClick={() => onQuickAction('analyze', targetSheetId)} className="whitespace-nowrap px-3 py-1.5 bg-green-50 text-green-700 rounded-full text-xs font-medium border border-green-100 hover:bg-green-100 transition-colors">
+                            📊 分析数据
                         </button>
                     </div>
                 )}
                 
                 <div className="relative">
-                    <Input 
+                    <Input.TextArea
+                        autoSize={{ minRows: 1, maxRows: 4 }}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="输入指令..."
-                        className="pr-10 rounded-xl py-2.5"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
+                        placeholder="输入指令 (如：添加一列邮箱)..."
+                        className="pr-10 rounded-xl py-2.5 resize-none"
                     />
                     <button 
                         onClick={handleSend}
                         disabled={!input.trim() || status === AIStatus.LOADING}
-                        className="absolute right-2 bottom-2 p-1.5 bg-indigo-600 text-white rounded-lg disabled:opacity-50 disabled:bg-slate-300 hover:bg-indigo-700 transition-colors"
+                        className="absolute right-2 bottom-2 p-1.5 bg-indigo-600 text-white rounded-lg disabled:opacity-50 disabled:bg-slate-300 hover:bg-indigo-700 transition-colors z-10"
                     >
                         <Send size={14} />
                     </button>

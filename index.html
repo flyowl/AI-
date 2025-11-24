@@ -1,9 +1,13 @@
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI SmartSheets</title>
+    <script>
+      window.process = { env: { NODE_ENV: 'production' } };
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -27,21 +31,31 @@
       }
       /* Antd overrides if needed */
       .ant-picker-suffix { color: #94a3b8; }
+      
+      /* Animation Utilities */
+      .fade-in {
+        animation: fadeIn 0.3s ease-in-out;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(5px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
     </style>
   <script type="importmap">
 {
   "imports": {
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react-router-dom": "https://esm.sh/react-router-dom@6.22.3?external=react,react-dom",
     "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
     "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
     "recharts": "https://aistudiocdn.com/recharts@^3.4.1",
     "antd": "https://esm.sh/antd@5.15.0?bundle&external=react,react-dom,dayjs",
     "dayjs": "https://esm.sh/dayjs@1.11.10",
-    "dayjs/": "https://esm.sh/dayjs@1.11.10/",
-    "antd/": "https://aistudiocdn.com/antd@^6.0.0/"
+    "antd/": "https://aistudiocdn.com/antd@^6.0.0/",
+    "dayjs/": "https://aistudiocdn.com/dayjs@^1.11.19/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
   }
 }
 </script>

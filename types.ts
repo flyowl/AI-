@@ -1,10 +1,15 @@
 
-export type ColumnType = 'text' | 'number' | 'select' | 'date' | 'checkbox' | 'url' | 'rating' | 'image' | 'file' | 'person' | 'phone' | 'email' | 'location';
+export type ColumnType = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'checkbox' | 'url' | 'rating' | 'image' | 'file' | 'person' | 'phone' | 'email' | 'location' | 'relation';
 
 export interface SelectOption {
   id: string;
   label: string;
   color: string; // tailwind color class e.g. 'bg-red-100 text-red-700'
+}
+
+export interface RelationConfig {
+    targetSheetId: string;
+    targetColumnId?: string; // The "linked" column in the other sheet (for bidirectional)
 }
 
 export interface Column {
@@ -13,6 +18,7 @@ export interface Column {
   type: ColumnType;
   width?: number;
   options?: SelectOption[]; // For 'select' type
+  relationConfig?: RelationConfig; // For 'relation' type
 }
 
 export interface RowData {
@@ -30,12 +36,60 @@ export interface SheetData {
 export interface Sheet {
   id: string;
   name: string;
+  type: 'sheet' | 'folder'; // Supports directory structure
+  parentId?: string;        // Supports nesting
+  isOpen?: boolean;         // For folder expansion
   columns: Column[];
   rows: RowData[];
   views: View[];
   activeViewId: string;
   selectedRowIds: Set<string>;
 }
+
+// --- Project & Team Types ---
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  thumbnail?: string;
+  updatedAt: number;
+  createdAt: number; // Made required
+  owner: string;
+  tags?: string[];
+  isStarred?: boolean; // Added for starred functionality
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  description?: string;
+  memberCount: number;
+  role: 'Admin' | 'Editor' | 'Viewer';
+  avatar?: string;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  role: 'Admin' | 'Editor' | 'Viewer';
+  email: string;
+  avatar: string;
+  status: 'Active' | 'Pending';
+  joinedAt: string;
+}
+
+export interface AppTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  color: string;
+  icon: any; // Lucide icon component name or string
+  popularity: number;
+}
+
+// --- Analysis & AI ---
 
 export interface AnalysisResult {
   summary: string;

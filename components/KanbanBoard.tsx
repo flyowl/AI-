@@ -1,4 +1,3 @@
-
 import React, { useMemo } from 'react';
 import { Column, RowData, SelectOption } from '../types';
 import { MoreHorizontal, Plus, User, Calendar, AlertCircle } from 'lucide-react';
@@ -16,7 +15,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ columns, rows, groupByColId, 
   // Find the grouping column (must be select type for best results, or we default)
   const groupCol = columns.find(c => c.id === groupByColId) || columns.find(c => c.type === 'select');
 
-  const groups = useMemo(() => {
+  const groups: Record<string, RowData[]> = useMemo(() => {
     if (!groupCol) return { '未分组': rows };
 
     const mapping: Record<string, RowData[]> = {};

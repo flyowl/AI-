@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { Column, RowData, AnalysisResult } from "../types";
 
@@ -21,7 +22,7 @@ export const generateSmartRows = async (
 
   // Context for specific select options
   const optionsContext = columns
-    .filter(c => c.type === 'select' && c.options)
+    .filter(c => (c.type === 'select' || c.type === 'multiSelect') && c.options)
     .map(c => `Column '${c.label}' allows these values: ${c.options?.map(o => o.label).join(', ')}`)
     .join('. ');
 
@@ -32,7 +33,8 @@ export const generateSmartRows = async (
     ${dataSample}
 
     Generate ${count} new distinct, realistic rows that follow the same pattern and context.
-    For 'select' columns, ONLY use the allowed values.
+    For 'select' columns, ONLY use the allowed values (single value).
+    For 'multiSelect' columns, use allowed values (can be multiple, return as array of strings).
     For 'rating' columns, use integers 1-5.
     For 'checkbox' columns, use boolean true/false.
     If existing data is in Chinese, generate new data in Chinese.
@@ -52,6 +54,8 @@ export const generateSmartRows = async (
                 acc[col.id] = { type: Type.NUMBER };
             } else if (col.type === 'checkbox') {
                 acc[col.id] = { type: Type.BOOLEAN };
+            } else if (col.type === 'multiSelect') {
+                acc[col.id] = { type: Type.ARRAY, items: { type: Type.STRING } };
             } else {
                 acc[col.id] = { type: Type.STRING };
             }
@@ -116,48 +120,163 @@ export const analyzeDataset = async (
 };
 
 /**
- * Generates columns and initial data based on a user prompt, supporting rich types.
+ * Generates a complete system of sheets (tables) based on a user prompt.
+ * Supports multiple sheets and relationships.
  */
-export const generateSheetFromPrompt = async (userPrompt: string): Promise<{ columns: Column[], rows: RowData[] }> => {
+export const generateSystem = async (userPrompt: string): Promise<{
+    name: string;
+    description?: string;
+    columns: any[];
+    sampleRows: any[];
+}[]> => {
   const ai = getClient();
-
-  const prompt = `Create a structured multidimensional dataset based on: "${userPrompt}".
-  
-  Output a JSON object with the following structure:
-  {
-    "columns": [
-      { "id": "col1", "label": "Label", "type": "text", "options": [...] }
-    ],
-    "rows": [
-      { "col1": "Value", "col2": "Value" }
-    ]
-  }
-
-  Rules:
-  1. Define columns with appropriate types: 'text', 'number', 'date', 'select', 'checkbox', 'rating', 'url', 'email', 'phone', 'person', 'location', 'image'.
-  2. For 'select' types, you MUST provide an 'options' array with 'label' and a 'color' (use tailwind classes like 'bg-red-100 text-red-800', 'bg-blue-100 text-blue-800', 'bg-green-100 text-green-800', 'bg-yellow-100 text-yellow-800', 'bg-purple-100 text-purple-800').
-  3. Generate at least 5 rows of sample data matching these columns.
-  4. If the user prompt is in Chinese, please generate column headers and data content in Chinese.
+  const prompt = `
+    You are an expert database architect and solution designer.
+    User Request: "${userPrompt}"
+    
+    Task: Design a comprehensive spreadsheet system (one or more related tables) to satisfy the request.
+    
+    Output JSON ONLY with the following structure:
+    {
+      "sheets": [
+        {
+          "name": "TableName",
+          "description": "Purpose of this table",
+          "columns": [
+            { 
+              "label": "Column Name", 
+              "type": "text|number|select|multiSelect|date|checkbox|rating|person|email|phone|url|image|relation",
+              "options": [{"label": "Option1", "color": "bg-blue-100 text-blue-800"}], // Required for select/multiSelect
+              "targetSheetName": "RelatedTableName" // REQUIRED if type is 'relation'. Must match the 'name' of another sheet in this JSON.
+            }
+          ],
+          "sampleRows": [
+            { "Column Name": "Value" } // Generate 1-3 rows of realistic sample data
+          ]
+        }
+      ]
+    }
+    
+    Rules:
+    1. **Analyze Intent**: If the user asks for a system (e.g. "CRM", "Operations Management", "Inventory"), YOU MUST create multiple related tables (e.g. Customers & Deals, Servers & Incidents).
+    2. **Relations**: Use the 'relation' column type to link tables. e.g. An "Orders" table should have a "Customer" relation column.
+    3. **Target Name Matching**: If type is 'relation', 'targetSheetName' MUST exactly match another sheet's "name" in your output.
+    4. **Column Types**: Use 'select' for status/category (provide options), 'person' for assignees, 'date' for timelines, 'number' for metrics.
+    5. **Language**: If the user prompt is in Chinese, generate all Names, Labels, Options and Data in Chinese.
+    6. **Sample Data**: minimal (1-3 rows) but realistic.
   `;
-
+  
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-      // Removed strict responseSchema because 'rows' items are dynamic and Type.OBJECT requires concrete properties.
-      // The prompt structure guidelines combined with JSON mode are sufficient.
     }
   });
 
-  if (!response.text) throw new Error("Generation failed");
+  if (!response.text) throw new Error("System generation failed");
   const data = JSON.parse(response.text);
   
-  // Ensure rows have IDs
-  const rowsWithIds = data.rows ? data.rows.map((r: any) => ({ ...r, id: crypto.randomUUID() })) : [];
-  
-  return {
-    columns: data.columns || [],
-    rows: rowsWithIds
-  };
+  return data.sheets || [];
 };
+
+/**
+ * Legacy single sheet generation (kept for backward compatibility if needed, but generateSystem is preferred)
+ */
+export const generateSheetFromPrompt = async (userPrompt: string): Promise<{ columns: Column[], rows: RowData[] }> => {
+   // Re-use the new system generator but just take the first sheet
+   const sheets = await generateSystem(userPrompt);
+   if (sheets.length === 0) throw new Error("No sheet generated");
+   
+   const firstSheet = sheets[0];
+   const columns = firstSheet.columns.map((c: any) => ({
+       id: crypto.randomUUID(),
+       label: c.label,
+       type: c.type,
+       options: c.options
+   }));
+   
+   const rows = firstSheet.sampleRows.map((r: any) => {
+       const row: RowData = { id: crypto.randomUUID() };
+       columns.forEach(c => row[c.id] = r[c.label]);
+       return row;
+   });
+
+   return { columns, rows };
+};
+
+/**
+ * Processes a natural language command to modify the sheet structure or data.
+ */
+export const processAgentCommand = async (
+  prompt: string,
+  columns: Column[],
+  sheetName: string
+): Promise<{ 
+  type: 'ADD_COLUMN' | 'DELETE_COLUMN' | 'RENAME_COLUMN' | 'FILL_DATA' | 'ANALYZE_DATA' | 'CREATE_SHEET' | 'NONE';
+  data?: any;
+  reply: string;
+}> => {
+  const ai = getClient();
+  const schemaContext = columns.map(c => `${c.label} (${c.type})`).join(', ');
+  
+  const sysPrompt = `
+  You are an expert spreadsheet agent. You are currently managing a sheet named "${sheetName}".
+  
+  Current Columns Structure: 
+  ${schemaContext}
+  
+  User Input: "${prompt}"
+  
+  Your task is to classify the user's intent and extract parameters to modify the current sheet OR create a new one/system.
+  
+  Supported Actions:
+  
+  1. **ADD_COLUMN**: User wants to add a new column/field to the *current* sheet.
+     - "data": { "label": "Column Name", "columnType": "Type" }
+     - "columnType" must be one of: text, number, select, multiSelect, date, person, checkbox, rating, email, phone, url, location, image.
+     - Infer the best type. e.g. "Add budget" -> number. "Add status" -> select.
+
+  2. **DELETE_COLUMN**: User wants to delete/remove a column from the *current* sheet.
+     - "data": { "label": "Column Name" }
+
+  3. **RENAME_COLUMN**: User wants to rename a column in the *current* sheet.
+     - "data": { "oldLabel": "Old Name", "newLabel": "New Name" }
+
+  4. **FILL_DATA**: User wants to generate sample data or fill rows for the *current* sheet.
+     - "data": { "count": number } (Default to 20 if not specified).
+
+  5. **ANALYZE_DATA**: User wants to analyze insights/charts for the *current* sheet.
+     - "data": {}
+
+  6. **CREATE_SHEET**: User explicitly wants to create a *NEW* separate sheet, table, or a whole system (CRM, ERP, etc).
+     - e.g. "Create a new table for Inventory", "Build a Project Management System", "I need a CRM", "Help me create an operations management table".
+     - Any request that implies starting a new topic or tracking a new entity should be CREATE_SHEET.
+     - "data": { "prompt": "Description of the new sheet/system" }
+
+  7. **NONE**: Conversational replies, explanations, or if the intent is unclear.
+  
+  Response Rules:
+  - If the user mentions "this table" or "this sheet" or "add column", default to modifying the current sheet (ADD_COLUMN, etc).
+  - If the user asks to "create", "build", "make" a new table/system or mentions a specific domain like "Operations Management", use CREATE_SHEET.
+  - Provide a friendly "reply" in Chinese (Simplified).
+  
+  Output JSON format only.
+  `;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: sysPrompt,
+    config: {
+        responseMimeType: "application/json"
+    }
+  });
+  
+  if (!response.text) return { type: 'NONE', reply: "我没听懂，请再说一遍。" };
+  try {
+    return JSON.parse(response.text);
+  } catch (e) {
+    console.error("JSON Parse Error", e);
+    return { type: 'NONE', reply: "处理指令时出错了。" };
+  }
+}

@@ -1,17 +1,21 @@
+
 import React, { useEffect, useState } from 'react';
-import { ColumnType, SelectOption, Column } from '../types';
-import { Modal, Form, Input, Select, Button } from 'antd';
+import { ColumnType, SelectOption, Column, Sheet } from '../types';
+import { Modal, Form, Input, Select, Button, Alert } from 'antd';
 import { 
     Type, Hash, List, Calendar, CheckSquare, 
     Link as LinkIcon, Star, Trash2, Plus,
-    Image as ImageIcon, FileText, User, Phone, Mail, MapPin
+    Image as ImageIcon, FileText, User, Phone, Mail, MapPin,
+    ArrowLeftRight, Tags
 } from 'lucide-react';
 
 interface AddColumnModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (name: string, type: ColumnType, options?: SelectOption[]) => void;
+  onSave: (name: string, type: ColumnType, options?: SelectOption[], relationTargetSheetId?: string) => void;
   initialData?: Column | null;
+  allSheets: Sheet[]; // Needed to select target for relation
+  currentSheetId: string;
 }
 
 const COLUMN_GROUPS = [
@@ -19,10 +23,17 @@ const COLUMN_GROUPS = [
         title: '基础',
         items: [
             { type: 'text' as ColumnType, label: '文本', icon: <Type size={16} /> },
-            { type: 'select' as ColumnType, label: '选项', icon: <List size={16} /> },
+            { type: 'select' as ColumnType, label: '单选', icon: <List size={16} /> },
+            { type: 'multiSelect' as ColumnType, label: '多选', icon: <Tags size={16} /> },
             { type: 'number' as ColumnType, label: '数字', icon: <Hash size={16} /> },
             { type: 'date' as ColumnType, label: '日期', icon: <Calendar size={16} /> },
             { type: 'checkbox' as ColumnType, label: '复选框', icon: <CheckSquare size={16} /> },
+        ]
+    },
+    {
+        title: '高级',
+        items: [
+            { type: 'relation' as ColumnType, label: '关联 (多表)', icon: <ArrowLeftRight size={16} /> },
         ]
     },
     {
@@ -61,7 +72,7 @@ const COLORS = [
   { bg: 'bg-pink-100', text: 'text-pink-700', label: '粉色' },
 ];
 
-const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave, initialData }) => {
+const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave, initialData, allSheets, currentSheetId }) => {
   const [form] = Form.useForm();
   const [type, setType] = useState<ColumnType>('text');
   
@@ -75,7 +86,8 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
       if (initialData) {
         form.setFieldsValue({
             label: initialData.label,
-            type: initialData.type
+            type: initialData.type,
+            targetSheetId: initialData.relationConfig?.targetSheetId
         });
         setType(initialData.type);
         setOptions(initialData.options || []);
@@ -90,7 +102,7 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
 
   const handleOk = () => {
     form.validateFields().then(values => {
-        onSave(values.label, type, type === 'select' ? options : undefined);
+        onSave(values.label, type, (type === 'select' || type === 'multiSelect') ? options : undefined, values.targetSheetId);
         onClose();
     });
   };
@@ -109,6 +121,8 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
   const removeOption = (id: string) => {
     setOptions(options.filter(o => o.id !== id));
   };
+
+  const validTargetSheets = allSheets.filter(s => s.type === 'sheet' && s.id !== currentSheetId);
 
   return (
     <Modal
@@ -155,10 +169,48 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
             </div>
         </div>
 
-        {/* Select Options Editor */}
-        {type === 'select' && (
+        {/* Relation Config */}
+        {type === 'relation' && (
+            <div className="bg-white p-4 rounded-lg border border-slate-200 mb-4 shadow-sm space-y-3">
+                 <div className="flex items-center gap-2 text-indigo-600 mb-2">
+                    <ArrowLeftRight size={16} />
+                    <span className="text-sm font-semibold">关联配置 (双向绑定)</span>
+                 </div>
+                 
+                 <Alert 
+                    message="双向关联"
+                    description="当您创建此列时，系统会自动在目标表中也创建一个关联回当前表的列。"
+                    type="info"
+                    showIcon
+                    className="text-xs mb-2"
+                 />
+
+                 <Form.Item
+                    name="targetSheetId"
+                    label="关联到哪个表?"
+                    rules={[{ required: true, message: '请选择目标表' }]}
+                    className="mb-0"
+                 >
+                     <Select placeholder="选择目标工作表...">
+                         {validTargetSheets.map(sheet => (
+                             <Select.Option key={sheet.id} value={sheet.id}>
+                                 <span className="flex items-center gap-2">{sheet.name}</span>
+                             </Select.Option>
+                         ))}
+                     </Select>
+                 </Form.Item>
+                 {validTargetSheets.length === 0 && (
+                     <div className="text-xs text-red-400">没有其他可用的工作表。请先创建另一个表。</div>
+                 )}
+            </div>
+        )}
+
+        {/* Select Options Editor - Shared for Select and MultiSelect */}
+        {(type === 'select' || type === 'multiSelect') && (
              <div className="bg-white p-4 rounded-lg border border-slate-200 mb-4 shadow-sm">
-                <h4 className="text-xs font-semibold text-slate-500 uppercase mb-2">下拉选项配置</h4>
+                <h4 className="text-xs font-semibold text-slate-500 uppercase mb-2">
+                    {type === 'select' ? '单选' : '多选'}选项配置
+                </h4>
                 
                 <div className="space-y-2 mb-3 max-h-[150px] overflow-y-auto pr-1">
                     {options.map(opt => (
@@ -202,30 +254,33 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
 
 // Helper component for color selection
 const DropdownMenuColorPicker: React.FC<{ selected: any, onChange: (c: any) => void }> = ({ selected, onChange }) => {
+    const options = COLORS.map((c, i) => ({
+        label: (
+             <div className="flex items-center gap-2 py-0.5">
+                <div className={`w-4 h-4 rounded-full ${c.bg}`} />
+                <span className="text-xs text-slate-600">{c.label}</span>
+             </div>
+        ),
+        value: c.label,
+        data: c
+    }));
+
     return (
         <Select
             value={selected.label}
             style={{ width: 90 }}
             dropdownMatchSelectWidth={false}
             variant="outlined"
-            optionLabelProp="label"
+            optionLabelProp="value"
             labelRender={() => (
                  <div className="flex items-center gap-2">
                     <div className={`w-3 h-3 rounded-full ${selected.bg.replace('100', '400')}`} />
                     <span className="text-xs text-slate-600">{selected.label}</span>
                  </div>
             )}
+            options={options}
             onChange={(_, option: any) => onChange(option.data)}
-        >
-            {COLORS.map((c, i) => (
-                <Select.Option key={i} value={c.label} label={c.label} data={c}>
-                     <div className="flex items-center gap-2 py-0.5">
-                        <div className={`w-4 h-4 rounded-full ${c.bg}`} />
-                        <span className="text-xs text-slate-600">{c.label}</span>
-                     </div>
-                </Select.Option>
-            ))}
-        </Select>
+        />
     )
 }
 

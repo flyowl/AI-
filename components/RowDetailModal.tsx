@@ -1,7 +1,7 @@
 
 import React, { useEffect } from 'react';
 import { Modal, Form, Input, Select, DatePicker, Checkbox, Rate, InputNumber } from 'antd';
-import { Column, RowData } from '../types';
+import { Column, RowData, Sheet } from '../types';
 import dayjs from 'dayjs';
 
 interface RowDetailModalProps {
@@ -10,9 +10,10 @@ interface RowDetailModalProps {
   onSave: (rowId: string, updates: Record<string, any>) => void;
   columns: Column[];
   rowData: RowData | null;
+  allSheets: Sheet[];
 }
 
-const RowDetailModal: React.FC<RowDetailModalProps> = ({ isOpen, onClose, onSave, columns, rowData }) => {
+const RowDetailModal: React.FC<RowDetailModalProps> = ({ isOpen, onClose, onSave, columns, rowData, allSheets }) => {
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -22,6 +23,9 @@ const RowDetailModal: React.FC<RowDetailModalProps> = ({ isOpen, onClose, onSave
         const val = rowData[col.id];
         if (col.type === 'date' && val) {
           formValues[col.id] = dayjs(val);
+        } else if ((col.type === 'multiSelect' || col.type === 'relation') && val !== undefined && val !== null) {
+            // Ensure array for multiple mode select
+            formValues[col.id] = Array.isArray(val) ? val : [val];
         } else {
           formValues[col.id] = val;
         }
@@ -57,23 +61,66 @@ const RowDetailModal: React.FC<RowDetailModalProps> = ({ isOpen, onClose, onSave
       case 'email':
       case 'phone':
       case 'location':
-      case 'person': // Treat person as text for simple editing for now
+      case 'person': 
         return <Input />;
       case 'number':
         return <InputNumber style={{ width: '100%' }} />;
+      
       case 'select':
+      case 'multiSelect':
         return (
-          <Select>
-            {col.options?.map(opt => (
-              <Select.Option key={opt.id} value={opt.label}>
-                <div className="flex items-center gap-2">
-                   <div className={`w-3 h-3 rounded-full ${opt.color.split(' ')[0]}`}></div>
-                   {opt.label}
-                </div>
-              </Select.Option>
-            ))}
-          </Select>
+          <Select
+            mode={col.type === 'multiSelect' ? 'multiple' : undefined}
+            className="w-full"
+            placeholder="请选择"
+            options={col.options?.map(opt => ({
+                value: opt.label,
+                label: (
+                    <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${opt.color || 'bg-slate-100 text-slate-700'}`}>
+                        {opt.label}
+                    </span>
+                )
+            }))}
+            tagRender={col.type === 'multiSelect' ? (props) => {
+                 const opt = col.options?.find(o => o.label === props.value);
+                 const { closable, onClose, value } = props;
+                 const colorClass = opt?.color || 'bg-slate-100 text-slate-700';
+                 return (
+                     <span className={`mr-1 px-1.5 py-0.5 rounded text-[10px] font-medium border border-transparent inline-flex items-center gap-1 my-0.5 ${colorClass}`}>
+                         {value}
+                         {closable && <span onClick={onClose} className="cursor-pointer opacity-60 hover:opacity-100 ml-1">×</span>}
+                     </span>
+                 )
+            } : undefined}
+          />
         );
+        
+      case 'relation':
+          // Relation Logic: Find target sheet and render multi-select of its rows
+          const targetSheetId = col.relationConfig?.targetSheetId;
+          const targetSheet = allSheets.find(s => s.id === targetSheetId);
+          
+          if (!targetSheet) {
+              return <span className="text-xs text-red-400">关联表失效或已被删除</span>;
+          }
+
+          const displayCol = targetSheet.columns.find(c => c.type === 'text') || targetSheet.columns[0];
+          const options = targetSheet.rows.map(r => ({
+              label: String(r[displayCol.id] || '未命名'),
+              value: r.id
+          }));
+
+          return (
+              <Select
+                  mode="multiple"
+                  placeholder="选择关联数据..."
+                  options={options}
+                  showSearch
+                  optionFilterProp="label"
+                  style={{ width: '100%' }}
+              />
+          );
+
       case 'date':
         return <DatePicker style={{ width: '100%' }} />;
       case 'checkbox':
@@ -98,14 +145,15 @@ const RowDetailModal: React.FC<RowDetailModalProps> = ({ isOpen, onClose, onSave
     >
       <Form form={form} layout="vertical" className="py-4 max-h-[60vh] overflow-y-auto pr-2">
         {columns.map(col => (
-          <Form.Item 
-            key={col.id} 
-            name={col.id} 
-            label={col.label} 
-            valuePropName={col.type === 'checkbox' ? 'checked' : 'value'}
-          >
-            {renderFormItem(col)}
-          </Form.Item>
+          <React.Fragment key={col.id}>
+              <Form.Item 
+                name={col.id} 
+                label={col.label} 
+                valuePropName={col.type === 'checkbox' ? 'checked' : 'value'}
+              >
+                {renderFormItem(col)}
+              </Form.Item>
+          </React.Fragment>
         ))}
       </Form>
     </Modal>

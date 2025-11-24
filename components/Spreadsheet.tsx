@@ -1,14 +1,14 @@
 
 import React, { useRef, useMemo, useState } from 'react';
-import { Column, RowData, Filter, SortRule, RowHeight, FilterMatchType, FilterOperator } from '../types';
+import { Column, RowData, Filter, SortRule, RowHeight, FilterMatchType, Sheet } from '../types';
 import { 
   Hash, Type, Calendar, CheckSquare, 
-  List, Link as LinkIcon, Star, MoreHorizontal,
+  List, Link as LinkIcon, Star,
   ArrowUpAz, ArrowDownZa, Settings, Copy, X,
-  ArrowUpDown, Plus, ChevronRight, ChevronDown,
-  User, Phone, Mail, MapPin, Image as ImageIcon, FileText, Upload, Maximize2
+  ArrowUpDown, Plus, ChevronRight,
+  User, Phone, Mail, MapPin, Image as ImageIcon, FileText, Upload, Maximize2, ArrowLeftRight, Tags
 } from 'lucide-react';
-import { Dropdown, MenuProps, Button, Input, Select, DatePicker, Checkbox, Rate, Popover, Avatar, InputNumber, Image, Tooltip } from 'antd';
+import { Dropdown, MenuProps, Button, Input, Select, DatePicker, Checkbox, Rate, Image as AntImage, Tooltip, Avatar, InputNumber } from 'antd';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
 
@@ -24,6 +24,7 @@ interface SpreadsheetProps {
   groupBy: string | null;
   rowHeight: RowHeight;
   hiddenColumnIds: Set<string>;
+  allSheets: Sheet[]; // Passed down to resolve relations
   
   onCellChange: (rowId: string, colId: string, value: any) => void;
   onDeleteRow: (rowId: string) => void;
@@ -53,6 +54,7 @@ const getColumnIcon = (type: string) => {
     case 'number': return <Hash size={14} className="text-orange-500" />;
     case 'date': return <Calendar size={14} className="text-pink-500" />;
     case 'select': return <List size={14} className="text-blue-500" />;
+    case 'multiSelect': return <Tags size={14} className="text-blue-600" />;
     case 'checkbox': return <CheckSquare size={14} className="text-green-500" />;
     case 'url': return <LinkIcon size={14} className="text-sky-500" />;
     case 'rating': return <Star size={14} className="text-yellow-500" />;
@@ -62,22 +64,29 @@ const getColumnIcon = (type: string) => {
     case 'location': return <MapPin size={14} className="text-rose-500" />;
     case 'image': return <ImageIcon size={14} className="text-indigo-500" />;
     case 'file': return <FileText size={14} className="text-slate-500" />;
+    case 'relation': return <ArrowLeftRight size={14} className="text-cyan-600" />;
     default: return <Type size={14} className="text-slate-400" />;
   }
 };
 
 const Spreadsheet: React.FC<SpreadsheetProps> = ({
-  columns, rows, selectedRowIds, sortRule, rowHeight, hiddenColumnIds, groupBy,
+  columns, rows, selectedRowIds, sortRule, rowHeight, hiddenColumnIds, groupBy, allSheets,
   onCellChange, onSelectRow, onSelectAll, onSortColumn, onDeleteColumn, onEditColumn, onDuplicateColumn, onAddRow, onAddColumn,
   onColumnReorder, onOpenRowDetail
 }) => {
   
-  // Local state to track which groups are expanded (ids of groups)
-  // Initialize with all visible or empty, using Set for performance
-  // By default, we assume all groups are expanded. If an ID is in the Set, it is Collapsed? 
-  // Or we can say if it is in the Set, it is Expanded. Let's go with: Set contains EXPANDED group keys.
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [initializedGroups, setInitializedGroups] = useState(false);
+  // Local state to track which groups are collapsed
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = (groupKey: string) => {
+      const newSet = new Set(collapsedGroups);
+      if (newSet.has(groupKey)) {
+          newSet.delete(groupKey);
+      } else {
+          newSet.add(groupKey);
+      }
+      setCollapsedGroups(newSet);
+  };
 
   // --- Grouping Logic ---
   const groupedRows = useMemo(() => {
@@ -92,18 +101,30 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
               groups[opt.label] = [];
           });
       }
-      groups['未分组'] = []; // Catch-all
-
+      
       rows.forEach(row => {
           let val = row[groupBy];
           let key = '未分组';
 
           if (val !== null && val !== undefined && val !== '') {
              if (groupCol?.type === 'date') {
-                 // Format date for grouping key
-                 key = dayjs(val).format('YYYY-MM-DD');
+                 // Format date for grouping key (Group by Day)
+                 const d = dayjs(val);
+                 if (d.isValid()) {
+                     key = d.format('YYYY-MM-DD');
+                 }
              } else if (groupCol?.type === 'checkbox') {
                  key = val ? '已选中' : '未选中';
+             } else if (groupCol?.type === 'person') {
+                 key = String(val); // Group by person name
+             } else if (groupCol?.type === 'multiSelect') {
+                 // Grouping by multiSelect will likely duplicate rows into multiple groups or group by combination
+                 // For simplicity: Group by combination string
+                 key = Array.isArray(val) ? val.sort().join(', ') : String(val);
+                 if (!key) key = '未分组';
+             } else if (groupCol?.type === 'relation') {
+                 // Grouping by relation is tricky, use simple count or first item
+                 key = Array.isArray(val) && val.length > 0 ? `${val.length} 个关联` : '无关联';
              } else {
                  key = String(val);
              }
@@ -112,24 +133,23 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
           if (!groups[key]) groups[key] = [];
           groups[key].push(row);
       });
+      
+      // Ensure '未分组' is last or handled, and remove empty groups if not select options
+      if (groups['未分组'] && groups['未分组'].length === 0) delete groups['未分组'];
 
+      // Optional: Sort group keys
       return groups;
   }, [rows, groupBy, columns]);
 
-  // Initialize expanded state once when groups change significantly or on mount
-  // But simpler: just default to expanded. If a key is NOT in collapsedGroups, it is expanded.
-  // Let's switch to tracking collapsed groups.
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-
-  const toggleGroup = (groupKey: string) => {
-      const newSet = new Set(collapsedGroups);
-      if (newSet.has(groupKey)) {
-          newSet.delete(groupKey);
-      } else {
-          newSet.add(groupKey);
-      }
-      setCollapsedGroups(newSet);
-  };
+  // Sorted keys for consistent rendering
+  const sortedGroupKeys = useMemo(() => {
+      if (!groupBy) return ['all'];
+      return Object.keys(groupedRows).sort((a, b) => {
+          if (a === '未分组') return 1;
+          if (b === '未分组') return -1;
+          return a.localeCompare(b);
+      });
+  }, [groupedRows, groupBy]);
 
 
   // --- Header Renderers ---
@@ -200,7 +220,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   const renderCell = (row: RowData, col: Column, isSelected: boolean) => {
       const value = row[col.id];
       const onChange = (val: any) => onCellChange(row.id, col.id, val);
-      const bgClass = isSelected ? 'bg-transparent' : ''; // Let row bg handle it
+      const bgClass = isSelected ? 'bg-transparent' : ''; 
 
       switch (col.type) {
           case 'text':
@@ -233,14 +253,72 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                       bordered={false}
                       value={value}
                       onChange={onChange}
+                      className={`w-full text-xs ${bgClass} select-cell-single`}
+                      // Map options to have a ReactNode label for both dropdown and selected display
+                      options={col.options?.map(o => ({ 
+                          value: o.label, 
+                          label: (
+                              <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${o.color || 'bg-slate-100 text-slate-700'}`}>
+                                  {o.label}
+                              </span>
+                          ) 
+                      }))}
+                      dropdownStyle={{ minWidth: 120 }}
+                  />
+              );
+          case 'multiSelect':
+              return (
+                  <Select
+                      mode="multiple"
+                      bordered={false}
+                      value={Array.isArray(value) ? value : []}
+                      onChange={onChange}
                       className={`w-full text-xs ${bgClass}`}
                       options={col.options?.map(o => ({ value: o.label, label: o.label }))}
                       dropdownStyle={{ minWidth: 120 }}
-                      tagRender={(props) => (
-                           <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${col.options?.find(o => o.label === props.value)?.color || 'bg-slate-100 text-slate-700'}`}>
-                               {props.label}
-                           </span>
-                      )}
+                      maxTagCount="responsive"
+                      showArrow={false}
+                      tagRender={(props) => {
+                          const opt = col.options?.find(o => o.label === props.value);
+                          return (
+                              <span className={`mr-1 px-1.5 py-0.5 rounded text-[10px] font-medium border border-transparent inline-flex items-center my-0.5 ${opt?.color || 'bg-slate-100 text-slate-700'}`}>
+                                  {props.label}
+                              </span>
+                          );
+                      }}
+                  />
+              );
+          case 'relation':
+              // 1. Find Target Sheet
+              const targetSheetId = col.relationConfig?.targetSheetId;
+              const targetSheet = allSheets.find(s => s.id === targetSheetId);
+              
+              if (!targetSheet) return <span className="px-3 text-xs text-red-300">表关联失效</span>;
+              
+              // 2. Determine Display Column (first text column)
+              const displayCol = targetSheet.columns.find(c => c.type === 'text') || targetSheet.columns[0];
+
+              // 3. Prepare Options
+              const relationOptions = targetSheet.rows.map(r => ({
+                  value: r.id,
+                  label: r[displayCol.id] || '未命名行'
+              }));
+
+              return (
+                  <Select
+                      mode="multiple"
+                      bordered={false}
+                      value={Array.isArray(value) ? value : []}
+                      onChange={onChange}
+                      className={`w-full text-xs ${bgClass} relation-select`}
+                      placeholder="关联..."
+                      options={relationOptions}
+                      maxTagCount="responsive"
+                      showSearch
+                      filterOption={(input, option) =>
+                        (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }
+                      dropdownStyle={{ minWidth: 160 }}
                   />
               );
           case 'date':
@@ -297,20 +375,19 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
 
   const renderRow = (row: RowData, idx: number) => {
       const isSelected = selectedRowIds.has(row.id);
-      // More explicit background color when selected, overrides hover
       const rowClass = isSelected ? 'bg-indigo-50' : 'bg-white hover:bg-slate-50/50';
 
       return (
         <tr key={row.id} className={`group transition-colors border-b border-slate-100 ${rowClass}`}>
-            <td className={`border-r border-slate-100 p-0 text-center relative text-slate-400 text-[10px] font-mono ${isSelected ? 'bg-indigo-100/50' : 'bg-white'}`}>
+            <td className={`border-r border-slate-100 p-0 text-center relative text-slate-400 text-[10px] font-mono w-10 ${isSelected ? 'bg-indigo-100/50' : 'bg-white'}`}>
                 <div className="absolute inset-0 flex items-center justify-center group-hover:hidden">
                     {isSelected ? <Checkbox checked={true} onChange={() => onSelectRow(row.id)}/> : idx + 1}
                 </div>
-                <div className="absolute inset-0 flex items-center justify-center hidden group-hover:flex bg-slate-50/10 backdrop-blur-[1px] gap-1">
+                <div className="absolute inset-0 flex items-center justify-center hidden group-hover:flex bg-slate-50/50 backdrop-blur-[1px] gap-1 z-10">
                     <Checkbox checked={isSelected} onChange={() => onSelectRow(row.id)}/>
                     <Tooltip title="展开详情">
                         <div 
-                            className="cursor-pointer text-slate-500 hover:text-indigo-600 bg-white rounded shadow-sm p-0.5 border border-slate-200"
+                            className="cursor-pointer text-slate-500 hover:text-indigo-600 bg-white rounded shadow-sm p-0.5 border border-slate-200 hover:border-indigo-300"
                             onClick={(e) => {
                                 e.stopPropagation();
                                 onOpenRowDetail && onOpenRowDetail(row.id);
@@ -358,11 +435,6 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                             const fromIndex = columns.findIndex(c => c.id === draggedColId);
                             const toIndex = columns.findIndex(c => c.id === col.id);
                             if(fromIndex !== -1 && toIndex !== -1) {
-                                const newColumns = [...columns];
-                                const [moved] = newColumns.splice(fromIndex, 1);
-                                newColumns.splice(toIndex, 0, moved);
-                                // We need to call a prop to update columns in parent, but for now we rely on index matching in render
-                                // Ideally Spreadsheet should accept onColumnReorder
                                 onColumnReorder(fromIndex, toIndex);
                             }
                         }
@@ -385,7 +457,8 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         <tbody>
             {/* Grouped Rendering */}
             {groupBy ? (
-                Object.entries(groupedRows).map(([groupValue, groupRows]) => {
+                sortedGroupKeys.map((groupValue) => {
+                    const groupRows = groupedRows[groupValue];
                     const groupCol = columns.find(c => c.id === groupBy);
                     const option = groupCol?.options?.find(o => o.label === groupValue);
                     const colorClass = option?.color || 'bg-slate-100 text-slate-700';
@@ -394,12 +467,12 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                     return (
                         <React.Fragment key={groupValue}>
                             <tr 
-                                className="bg-slate-50/80 cursor-pointer hover:bg-slate-100"
+                                className="bg-slate-50/80 cursor-pointer hover:bg-slate-100 transition-colors"
                                 onClick={() => toggleGroup(groupValue)}
                             >
-                                <td className="border-b border-slate-200 p-0 text-center text-slate-400">
+                                <td className="border-b border-slate-200 p-0 text-center text-slate-400 w-10">
                                      <div className="flex items-center justify-center h-full">
-                                        <ChevronRight size={14} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`}/>
+                                        <ChevronRight size={14} className={`transition-transform duration-200 ${isCollapsed ? '' : 'rotate-90'}`}/>
                                      </div>
                                 </td>
                                 <td colSpan={visibleColumns.length + 1} className="px-2 py-1.5 border-b border-slate-200">
@@ -457,7 +530,7 @@ const ImageCell: React.FC<{ value: any, onChange: (val: any) => void }> = ({ val
         <div className="relative group w-full h-full flex items-center justify-center bg-slate-50/20 transition-all hover:bg-slate-50/50">
             {value ? (
                 <div className="w-full h-full p-1 flex items-center justify-center">
-                    <Image 
+                    <AntImage 
                         src={value} 
                         className="object-cover rounded-sm border border-slate-200" 
                         style={{ width: '100%', height: '100%', maxHeight: 80, objectFit: 'cover' }}
