@@ -1,5 +1,5 @@
 {
-  "name": "AI SmartSheets",
+  "name": "多维表格管理系统",
   "description": "An intelligent online spreadsheet application powered by Gemini. Features smart data generation, instant analysis, and automated visualization.",
   "requestFramePermissions": []
 }

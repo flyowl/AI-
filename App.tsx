@@ -1,18 +1,34 @@
 
-import React from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import DashboardLayout from './components/layout/DashboardLayout';
-import Home from './pages/Home';
-import Team from './pages/Team';
-import Market from './pages/Market';
-import ProjectEditor from './pages/ProjectEditor';
-import Login from './pages/Login';
-import Settings from './pages/Settings';
-import { ConfigProvider } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { ConfigProvider, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { FileText, Users, Star, Grid } from 'lucide-react';
+import Worksheet from './components/worksheet/Worksheet';
+import { Sheet } from './types';
+import { saveSheets, loadSheets } from './services/db';
 
 const App: React.FC = () => {
+  const [sheets, setSheets] = useState<Sheet[] | null>(null);
+
+  useEffect(() => {
+    const init = async () => {
+      const loaded = await loadSheets();
+      setSheets(loaded);
+    };
+    init();
+  }, []);
+
+  const handleSave = (newSheets: Sheet[]) => {
+      saveSheets(newSheets);
+  };
+
+  if (sheets === null) {
+      return (
+          <div className="h-screen w-full flex items-center justify-center bg-slate-50">
+              <Spin size="large" />
+          </div>
+      )
+  }
+
   return (
     <ConfigProvider
       locale={zhCN}
@@ -24,29 +40,11 @@ const App: React.FC = () => {
         },
       }}
     >
-        <HashRouter>
-            <Routes>
-                {/* Auth Routes */}
-                <Route path="/login" element={<Login />} />
-
-                {/* Editor Routes (Fullscreen) */}
-                <Route path="/project/:projectId" element={<ProjectEditor />} />
-                
-                {/* Dashboard Routes (Layout) */}
-                <Route path="/" element={<DashboardLayout />}>
-                    <Route index element={<Home />} />
-                    <Route path="files" element={<Home />} />
-                    <Route path="shared" element={<Home />} />
-                    <Route path="starred" element={<Home />} />
-                    <Route path="space" element={<Home />} />
-                    
-                    <Route path="team" element={<Team />} />
-                    <Route path="projects" element={<Home />} />
-                    <Route path="market" element={<Market />} />
-                    <Route path="settings" element={<Settings />} />
-                </Route>
-            </Routes>
-        </HashRouter>
+        <Worksheet 
+            title="多维表格"
+            initialSheets={sheets}
+            onSave={handleSave}
+        />
     </ConfigProvider>
   );
 };

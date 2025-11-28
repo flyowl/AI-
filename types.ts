@@ -1,5 +1,6 @@
 
-export type ColumnType = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'checkbox' | 'url' | 'rating' | 'image' | 'file' | 'person' | 'phone' | 'email' | 'location' | 'relation';
+
+export type ColumnType = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'checkbox' | 'switch' | 'url' | 'rating' | 'image' | 'file' | 'person' | 'phone' | 'email' | 'location' | 'relation';
 
 export interface SelectOption {
   id: string;
@@ -10,6 +11,7 @@ export interface SelectOption {
 export interface RelationConfig {
     targetSheetId: string;
     targetColumnId?: string; // The "linked" column in the other sheet (for bidirectional)
+    bidirectional?: boolean; // Whether to create/maintain a back-link in the target sheet
 }
 
 export interface Column {
@@ -19,6 +21,7 @@ export interface Column {
   width?: number;
   options?: SelectOption[]; // For 'select' type
   relationConfig?: RelationConfig; // For 'relation' type
+  defaultValue?: any; // Configured default value for new rows
 }
 
 export interface RowData {
@@ -26,67 +29,20 @@ export interface RowData {
   [key: string]: any; // flexible type for boolean, number, string
 }
 
-export interface SheetData {
-  name: string;
-  columns: Column[];
-  rows: RowData[];
-}
-
-// New Sheet Interface for Multi-sheet support
 export interface Sheet {
   id: string;
   name: string;
-  type: 'sheet' | 'folder'; // Supports directory structure
+  type: 'sheet' | 'folder' | 'document'; // Updated to include 'document'
   parentId?: string;        // Supports nesting
   isOpen?: boolean;         // For folder expansion
+  content?: string;         // For documents
+  
+  // Spreadsheet specific
   columns: Column[];
   rows: RowData[];
   views: View[];
   activeViewId: string;
   selectedRowIds: Set<string>;
-}
-
-// --- Project & Team Types ---
-
-export interface Project {
-  id: string;
-  name: string;
-  description?: string;
-  thumbnail?: string;
-  updatedAt: number;
-  createdAt: number; // Made required
-  owner: string;
-  tags?: string[];
-  isStarred?: boolean; // Added for starred functionality
-}
-
-export interface Team {
-  id: string;
-  name: string;
-  description?: string;
-  memberCount: number;
-  role: 'Admin' | 'Editor' | 'Viewer';
-  avatar?: string;
-}
-
-export interface TeamMember {
-  id: string;
-  name: string;
-  role: 'Admin' | 'Editor' | 'Viewer';
-  email: string;
-  avatar: string;
-  status: 'Active' | 'Pending';
-  joinedAt: string;
-}
-
-export interface AppTemplate {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  color: string;
-  icon: any; // Lucide icon component name or string
-  popularity: number;
 }
 
 // --- Analysis & AI ---
@@ -151,4 +107,45 @@ export interface ChatMessage {
     content: string;
     timestamp: number;
     isError?: boolean;
+}
+
+// --- App & Project Types ---
+
+export interface Team {
+    id: string;
+    name: string;
+    memberCount: number;
+    role: string;
+    description?: string;
+}
+
+export interface Project {
+    id: string;
+    name: string;
+    updatedAt: number;
+    createdAt: number;
+    owner: string;
+    description: string;
+    projectType: 'spreadsheet' | 'document';
+    isStarred?: boolean;
+}
+
+export interface TeamMember {
+    id: string;
+    name: string;
+    role: string;
+    email: string;
+    avatar: string; // Initials or URL
+    status: 'Active' | 'Pending';
+    joinedAt: string;
+}
+
+export interface AppTemplate {
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    color: string;
+    icon: any; // Lucide Icon component
+    popularity: number;
 }

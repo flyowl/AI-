@@ -1,6 +1,7 @@
 
+
 import React, { useState, useMemo } from 'react';
-import { Column, RowData, View, AnalysisResult, ColumnType, SelectOption, Sheet } from '../types';
+import { Column, RowData, View, AnalysisResult, ColumnType, SelectOption, Sheet, RelationConfig } from '../types';
 import Spreadsheet from './Spreadsheet';
 import KanbanBoard from './KanbanBoard';
 import GalleryGrid from './GalleryGrid';
@@ -8,8 +9,8 @@ import DataViz from './DataViz';
 import ViewToolbar from './ViewToolbar';
 import AddColumnModal from './AddColumnModal';
 import RowDetailModal from './RowDetailModal';
-import { Modal, message, Button } from 'antd';
-import { Trash2, Copy, X } from 'lucide-react';
+import { Modal, message, Button, Select } from 'antd';
+import { Trash2, Copy, X, Kanban } from 'lucide-react';
 import dayjs from 'dayjs';
 
 interface SmartSpreadsheetProps {
@@ -169,6 +170,26 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
     onViewsChange(newViews);
   };
 
+  const handleAddRowAndOpenDetail = (initialValues: Partial<RowData> = {}) => {
+      const newId = crypto.randomUUID();
+      const newRow: RowData = { id: newId, ...initialValues };
+      
+      columns.forEach(c => {
+          if (newRow[c.id] === undefined) {
+              if (c.defaultValue !== undefined && c.defaultValue !== null && c.defaultValue !== '') {
+                  newRow[c.id] = c.defaultValue;
+              } else {
+                  if (c.type === 'checkbox' || c.type === 'switch') newRow[c.id] = false;
+                  else newRow[c.id] = '';
+              }
+          }
+      });
+      
+      onRowsChange([...rows, newRow]);
+      setDetailRowId(newId);
+      message.success('新行已创建');
+  };
+
   // Data Operations
   const handleCellChange = (rowId: string, colId: string, value: any) => {
       // 1. Update current sheet
@@ -177,7 +198,8 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
 
       // 2. Handle Bidirectional Updates if it's a Relation Column
       const col = columns.find(c => c.id === colId);
-      if (col?.type === 'relation' && col.relationConfig) {
+      // Only proceed if it is a relation AND bidirectional (default is true if undefined)
+      if (col?.type === 'relation' && col.relationConfig && col.relationConfig.bidirectional !== false) {
           const targetSheetId = col.relationConfig.targetSheetId;
           const targetSheet = allSheets.find(s => s.id === targetSheetId);
           
@@ -218,6 +240,23 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       }
   };
 
+  const handleBatchCellChange = (updates: {rowId: string, colId: string, value: any}[]) => {
+      const updatesMap = new Map<string, Record<string, any>>();
+      updates.forEach(u => {
+         if(!updatesMap.has(u.rowId)) updatesMap.set(u.rowId, {});
+         updatesMap.get(u.rowId)![u.colId] = u.value;
+      });
+
+      const newRows = rows.map(row => {
+          if (updatesMap.has(row.id)) {
+              return { ...row, ...updatesMap.get(row.id) };
+          }
+          return row;
+      });
+      onRowsChange(newRows);
+      message.success('已更新');
+  };
+
   const handleRowUpdate = (rowId: string, updates: Record<string, any>) => {
       const newRows = rows.map(row => row.id === rowId ? { ...row, ...updates } : row);
       onRowsChange(newRows);
@@ -237,8 +276,12 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       const newId = crypto.randomUUID();
       const newRow: RowData = { id: newId };
       columns.forEach(c => {
-          if(c.type === 'checkbox') newRow[c.id] = false;
-          else newRow[c.id] = '';
+          if (c.defaultValue !== undefined && c.defaultValue !== null && c.defaultValue !== '') {
+              newRow[c.id] = c.defaultValue;
+          } else {
+              if (c.type === 'checkbox' || c.type === 'switch') newRow[c.id] = false;
+              else newRow[c.id] = '';
+          }
       });
       onRowsChange([...rows, newRow]);
       message.success('新行已添加');
@@ -296,8 +339,114 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
     onSelectionChange(newSet);
   };
 
+  // Smart Paste Handler
+  const handleSmartPaste = (
+      data: string[][], 
+      targetRowId: string | null, 
+      targetColId: string | null,
+      pasteRange?: { rowIds: string[], colIds: string[] }
+  ) => {
+      if (data.length === 0) return;
+
+      // Logic: If range selected and data is single cell, fill range.
+      const isSingleValuePaste = data.length === 1 && data[0].length === 1;
+      const isFillingRange = isSingleValuePaste && pasteRange && pasteRange.rowIds.length > 1;
+
+      let effectiveData = data;
+      let effectiveTargetRowId = targetRowId;
+      let effectiveTargetColId = targetColId;
+      
+      if (isFillingRange && pasteRange) {
+          // Construct expanded data to fill range
+          const val = data[0][0];
+          const rowsCount = pasteRange.rowIds.length;
+          const colsCount = pasteRange.colIds.length;
+          
+          effectiveData = Array(rowsCount).fill(0).map(() => Array(colsCount).fill(val));
+          // Start at top-left of range
+          effectiveTargetRowId = pasteRange.rowIds[0];
+          effectiveTargetColId = pasteRange.colIds[0];
+      }
+      
+      const pasteRowCount = effectiveData.length;
+      const pasteColCount = effectiveData.reduce((max, row) => Math.max(max, row.length), 0);
+
+      const visibleCols = columns.filter(c => !activeView.config.hiddenColumnIds.includes(c.id));
+      
+      // Determine Start Indices
+      let startRowIndex = processedRows.findIndex(r => r.id === effectiveTargetRowId);
+      if (startRowIndex === -1) startRowIndex = processedRows.length; // Append if no target
+      
+      let startColIndex = visibleCols.findIndex(c => c.id === effectiveTargetColId);
+      if (startColIndex === -1) startColIndex = 0; // Default to first col
+
+      // 1. Expand Columns if needed
+      const neededCols = startColIndex + pasteColCount;
+      const currentCols = visibleCols.length;
+      let newCols = [...columns];
+      
+      if (neededCols > currentCols) {
+          const colsToAdd = neededCols - currentCols;
+          for (let i = 0; i < colsToAdd; i++) {
+              const newColId = crypto.randomUUID();
+              newCols.push({
+                  id: newColId,
+                  label: `新列 ${currentCols + i + 1}`,
+                  type: 'text' // Default type
+              });
+          }
+          onColumnsChange(newCols);
+      }
+      
+      const allVisibleCols = newCols.filter(c => !activeView.config.hiddenColumnIds.includes(c.id));
+      
+      // 2. Expand Rows if needed
+      let updatedRows = [...rows];
+      const rowsToAdd = Math.max(0, (startRowIndex + pasteRowCount) - processedRows.length);
+      
+      for(let i = 0; i < rowsToAdd; i++) {
+          updatedRows.push({ id: crypto.randomUUID() });
+      }
+
+      const targetRowIds: string[] = [];
+      // Fill existing targets
+      for(let i=0; i<processedRows.length; i++) {
+          if (i >= startRowIndex && i < startRowIndex + pasteRowCount) {
+              targetRowIds.push(processedRows[i].id);
+          }
+      }
+      // Fill new targets
+      const startNewRowsIdx = updatedRows.length - rowsToAdd;
+      for(let i=0; i<rowsToAdd; i++) {
+          targetRowIds.push(updatedRows[startNewRowsIdx + i].id);
+      }
+
+      // Apply Data
+      updatedRows = updatedRows.map(row => {
+         const targetIdx = targetRowIds.indexOf(row.id);
+         if (targetIdx !== -1) {
+             const pasteRowData = effectiveData[targetIdx];
+             const updates: any = {};
+             if (pasteRowData) {
+                 pasteRowData.forEach((cellVal, cIdx) => {
+                     const destColIndex = startColIndex + cIdx;
+                     const destCol = allVisibleCols[destColIndex];
+                     if (destCol) {
+                         updates[destCol.id] = cellVal;
+                     }
+                 });
+             }
+             return { ...row, ...updates };
+         }
+         return row;
+      });
+
+      onRowsChange(updatedRows);
+      message.success(`已粘贴 ${pasteRowCount} 行 x ${pasteColCount} 列数据`);
+  };
+
   // Column Operations
-  const handleSaveColumn = (name: string, type: ColumnType, options?: SelectOption[], targetSheetId?: string) => {
+  const handleSaveColumn = (name: string, type: ColumnType, options?: SelectOption[], relationConfig?: RelationConfig, defaultValue?: any) => {
     if (editingColumn) {
         // Edit Mode
         const newCols = columns.map(col => col.id === editingColumn.id ? { 
@@ -305,7 +454,8 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
             label: name, 
             type, 
             options,
-            relationConfig: targetSheetId ? { targetSheetId } : undefined
+            relationConfig,
+            defaultValue
         } : col);
         onColumnsChange(newCols);
         setEditingColumn(null);
@@ -318,12 +468,15 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
             label: name, 
             type, 
             options,
-            relationConfig: targetSheetId ? { targetSheetId } : undefined
+            relationConfig,
+            defaultValue
         };
         onColumnsChange([...columns, newCol]);
 
         // --- Bidirectional Column Creation ---
-        if (type === 'relation' && targetSheetId) {
+        // Only if bidirectional is true (default)
+        if (type === 'relation' && relationConfig?.targetSheetId && relationConfig.bidirectional !== false) {
+            const targetSheetId = relationConfig.targetSheetId;
             onUpdateOtherSheet(targetSheetId, (targetSheet) => {
                 // Check if already exists to avoid dupes (optional, but good practice)
                 // We create a "Linked to [This Sheet Name]" column
@@ -332,7 +485,10 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     id: crypto.randomUUID(),
                     label: backLinkLabel,
                     type: 'relation',
-                    relationConfig: { targetSheetId: sheetId }
+                    relationConfig: { 
+                        targetSheetId: sheetId,
+                        bidirectional: true // The backlink is also bidirectional
+                    }
                 };
                 return {
                     ...targetSheet,
@@ -415,6 +571,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     hiddenColumnIds={new Set(activeView.config.hiddenColumnIds)}
                     allSheets={allSheets}
                     onCellChange={handleCellChange}
+                    onCellsChange={handleBatchCellChange} // Pass batch handler
                     onDeleteRow={handleDeleteRow}
                     onAddRow={handleAddRow}
                     onSelectRow={handleSelectRow}
@@ -433,38 +590,49 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     onRowHeightChange={(height) => handleUpdateViewConfig({ rowHeight: height })}
                     onHiddenColumnIdsChange={(ids) => handleUpdateViewConfig({ hiddenColumnIds: Array.from(ids) })}
                     onOpenRowDetail={setDetailRowId}
+                    onPaste={handleSmartPaste}
                 />
             )}
 
             {activeView.type === 'kanban' && (
                 <div className="flex-1 overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-                        <div className="p-2 border-b border-slate-100 flex items-center justify-between bg-slate-50 px-4">
-                            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Kanban</span>
-                            <select 
-                            className="text-xs border border-slate-200 rounded px-2 py-1 bg-white"
-                            value={activeView.config.groupBy || ''}
-                            onChange={(e) => handleUpdateViewConfig({ groupBy: e.target.value })}
-                            >
-                                <option value="" disabled>分组依据...</option>
-                                {columns.filter(c => c.type === 'select').map(c => (
-                                    <option key={c.id} value={c.id}>{c.label}</option>
-                                ))}
-                            </select>
+                        <div className="p-3 border-b border-slate-100 flex items-center justify-between bg-white px-6">
+                            <span className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                                <Kanban size={16} className="text-indigo-500" />
+                                看板视图
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-slate-500">分组依据:</span>
+                                <Select 
+                                    size="small"
+                                    className="w-40"
+                                    value={activeView.config.groupBy || undefined}
+                                    placeholder="选择分组列"
+                                    onChange={(val) => handleUpdateViewConfig({ groupBy: val })}
+                                    options={columns.filter(c => c.type === 'select').map(c => ({ label: c.label, value: c.id }))}
+                                />
+                            </div>
                         </div>
-                        <div className="flex-1 overflow-hidden">
-                        <KanbanBoard 
-                            columns={columns}
-                            rows={processedRows}
-                            groupByColId={activeView.config.groupBy || columns.find(c => c.type === 'select')?.id || null}
-                            onCardClick={(id) => setDetailRowId(id)}
-                        />
+                        <div className="flex-1 overflow-hidden bg-slate-50/50">
+                            <KanbanBoard 
+                                columns={columns}
+                                rows={processedRows}
+                                groupByColId={activeView.config.groupBy || columns.find(c => c.type === 'select')?.id || null}
+                                onCardClick={(id) => setDetailRowId(id)}
+                                onAddClick={handleAddRowAndOpenDetail}
+                            />
                         </div>
                 </div>
             )}
 
             {activeView.type === 'gallery' && (
                 <div className="flex-1 overflow-hidden rounded-xl bg-slate-100 border border-slate-200">
-                    <GalleryGrid columns={columns} rows={processedRows} />
+                    <GalleryGrid 
+                        columns={columns} 
+                        rows={processedRows} 
+                        onCardClick={(id) => setDetailRowId(id)}
+                        onAddClick={() => handleAddRowAndOpenDetail()}
+                    />
                 </div>
             )}
             
@@ -480,22 +648,22 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
 
             {/* Selection Floating Bar */}
             {selectedRowIds.size > 0 && (
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-slate-200 rounded-full px-6 py-2.5 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
-                    <div className="flex items-center gap-2 text-sm text-slate-600 font-medium">
-                        <div className="bg-indigo-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-slate-200 rounded-full px-6 py-3 flex items-center gap-6 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200 whitespace-nowrap max-w-[90vw] overflow-x-auto hide-scrollbar">
+                    <div className="flex items-center gap-2 text-sm text-slate-600 font-medium shrink-0">
+                        <div className="bg-indigo-600 text-white text-xs rounded-full px-2 py-0.5 h-5 flex items-center justify-center">
                             {selectedRowIds.size}
                         </div>
                         <span>项已选择</span>
                     </div>
                     
-                    <div className="h-4 w-px bg-slate-200 mx-1"></div>
+                    <div className="h-4 w-px bg-slate-200 shrink-0"></div>
                     
                     <Button 
                         type="text" 
                         icon={<Copy size={14}/>} 
                         size="small" 
                         onClick={(e) => { e.stopPropagation(); handleDuplicateSelected(); }}
-                        className="text-slate-600 hover:text-indigo-600"
+                        className="text-slate-600 hover:text-indigo-600 shrink-0"
                     >
                         复制
                     </Button>
@@ -506,17 +674,18 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                         icon={<Trash2 size={14}/>} 
                         size="small" 
                         onClick={(e) => { e.stopPropagation(); handleDeleteSelectedTrigger(); }}
+                        className="shrink-0"
                     >
                         删除
                     </Button>
                     
-                    <div className="h-4 w-px bg-slate-200 mx-1"></div>
+                    <div className="h-4 w-px bg-slate-200 shrink-0"></div>
 
                     <Button 
                         type="text" 
                         icon={<X size={14}/>} 
                         size="small"
-                        className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full w-6 h-6 flex items-center justify-center p-0 min-w-0"
+                        className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full w-6 h-6 flex items-center justify-center p-0 min-w-0 shrink-0"
                         onClick={(e) => { e.stopPropagation(); onSelectionChange(new Set()); }}
                     />
                 </div>

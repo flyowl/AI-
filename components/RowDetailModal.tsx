@@ -1,6 +1,7 @@
 
+
 import React, { useEffect } from 'react';
-import { Modal, Form, Input, Select, DatePicker, Checkbox, Rate, InputNumber } from 'antd';
+import { Modal, Form, Input, Select, DatePicker, Checkbox, Rate, InputNumber, Switch } from 'antd';
 import { Column, RowData, Sheet } from '../types';
 import dayjs from 'dayjs';
 
@@ -125,6 +126,8 @@ const RowDetailModal: React.FC<RowDetailModalProps> = ({ isOpen, onClose, onSave
         return <DatePicker style={{ width: '100%' }} />;
       case 'checkbox':
         return <Checkbox>已选中</Checkbox>;
+      case 'switch':
+        return <Switch checkedChildren="开启" unCheckedChildren="关闭" />;
       case 'rating':
         return <Rate />;
       case 'image':
@@ -149,7 +152,7 @@ const RowDetailModal: React.FC<RowDetailModalProps> = ({ isOpen, onClose, onSave
               <Form.Item 
                 name={col.id} 
                 label={col.label} 
-                valuePropName={col.type === 'checkbox' ? 'checked' : 'value'}
+                valuePropName={(col.type === 'checkbox' || col.type === 'switch') ? 'checked' : 'value'}
               >
                 {renderFormItem(col)}
               </Form.Item>

@@ -1,43 +1,158 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { Column, RowData, AnalysisResult } from "../types";
 
 const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 /**
- * Generates new rows based on existing data patterns (Smart Fill).
+ * 1. Create Project: Generates a multi-sheet system with relations.
+ */
+export const generateSystem = async (userPrompt: string): Promise<any[]> => {
+  const ai = getClient();
+  const prompt = `
+    Role: System Architect.
+    Task: Design a multi-table database system based on this request: "${userPrompt}".
+    
+    Output:
+    Return a STRICT JSON array of "Sheet" objects.
+    
+    Schema Rules:
+    1. "name": Table name.
+    2. "columns": Array of { "label": string, "type": string, "options"?: { "label": string, "color": string }[], "targetSheetName"?: string }.
+       - Supported types: 'text', 'number', 'select', 'multiSelect', 'date', 'checkbox', 'switch', 'rating', 'person', 'phone', 'email', 'url', 'location', 'image', 'relation'.
+       - For 'select'/'multiSelect', provide "options" with tailwind colors (e.g. "bg-red-100 text-red-700").
+       - For 'relation', you MUST provide "targetSheetName" matching another table's name in this array.
+    3. "sampleRows": Array of objects with 3-5 realistic data entries matching the columns. Keys must match column labels.
+
+    Example JSON Structure:
+    [
+      {
+        "name": "Projects",
+        "columns": [
+          { "label": "Project Name", "type": "text" },
+          { "label": "Status", "type": "select", "options": [{ "label": "Active", "color": "bg-green-100 text-green-800" }] }
+        ],
+        "sampleRows": [{ "Project Name": "Website Redesign", "Status": "Active" }]
+      },
+      {
+        "name": "Tasks",
+        "columns": [
+           { "label": "Task Title", "type": "text" },
+           { "label": "Is Completed", "type": "switch" },
+           { "label": "Project", "type": "relation", "targetSheetName": "Projects" }
+        ],
+        "sampleRows": [{ "Task Title": "Design Mockups", "Is Completed": false, "Project": "Website Redesign" }]
+      }
+    ]
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: { responseMimeType: "application/json" },
+    });
+    
+    if (!response.text) throw new Error("No system generated");
+    return JSON.parse(response.text);
+  } catch (error) {
+    console.error("Generate System Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * 2. Modify Table: Modifies schema of a single table.
+ */
+export const modifySheetSchema = async (
+    userInstruction: string, 
+    currentColumns: Column[], 
+    sheetName: string
+): Promise<{ type: 'ADD_COLUMN' | 'DELETE_COLUMN' | 'RENAME_COLUMN' | 'NO_ACTION', data: any, reply: string }> => {
+    const ai = getClient();
+    const colSummary = currentColumns.map(c => `${c.label} (${c.type})`).join(', ');
+
+    const prompt = `
+      Role: Database Admin.
+      Context: Table "${sheetName}" has columns: [${colSummary}].
+      User Request: "${userInstruction}"
+      
+      Task: Determine the single best schema change action.
+      
+      Output JSON Format:
+      {
+        "type": "ADD_COLUMN" | "DELETE_COLUMN" | "RENAME_COLUMN" | "NO_ACTION",
+        "data": {
+           // For ADD_COLUMN
+           "label"?: "New Column Name",
+           "columnType"?: "text" | "number" | "select" | "date" | "checkbox" | "switch" | "rating" | "email", 
+           "options"?: [{"label": "Opt1", "color": "bg-blue-100 text-blue-700"}], // If select
+           
+           // For DELETE_COLUMN
+           "label"?: "Column Name To Delete",
+           
+           // For RENAME_COLUMN
+           "oldLabel"?: "Old Name",
+           "newLabel"?: "New Name"
+        },
+        "reply": "Short conversational confirmation message."
+      }
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: { responseMimeType: "application/json" },
+        });
+        if (!response.text) throw new Error("No schema change generated");
+        return JSON.parse(response.text);
+    } catch (error) {
+        console.error("Modify Schema Error", error);
+        throw error;
+    }
+}
+
+/**
+ * 3. Fill Data: Generates new rows based on schema and instruction.
  */
 export const generateSmartRows = async (
   columns: Column[],
   rows: RowData[],
-  count: number = 5
+  count: number = 10,
+  userInstruction: string = ""
 ): Promise<RowData[]> => {
   const ai = getClient();
   
   // Prepare context
-  const header = columns.map(c => `${c.label} (${c.type})`).join(", ");
-  const dataSample = rows.slice(-10).map(row => {
-    return columns.map(c => row[c.id]).join(", ");
+  const header = columns.map(c => {
+      let desc = `${c.label} (Type: ${c.type})`;
+      if (c.type === 'select' || c.type === 'multiSelect') {
+          desc += ` Options: [${c.options?.map(o => o.label).join(', ')}]`;
+      }
+      return desc;
   }).join("\n");
 
-  // Context for specific select options
-  const optionsContext = columns
-    .filter(c => (c.type === 'select' || c.type === 'multiSelect') && c.options)
-    .map(c => `Column '${c.label}' allows these values: ${c.options?.map(o => o.label).join(', ')}`)
-    .join('. ');
+  const dataSample = rows.slice(-3).map(row => {
+    return JSON.stringify(row);
+  }).join("\n");
 
   const prompt = `
-    I have a dataset with the following columns: ${header}.
-    ${optionsContext}
-    Here are the most recent rows:
+    Role: Data Generator.
+    Task: Generate exactly ${count} new realistic rows for this table.
+    
+    Table Schema (Strictly follow types and options):
+    ${header}
+    
+    Existing Data (Style Reference):
     ${dataSample}
 
-    Generate ${count} new distinct, realistic rows that follow the same pattern and context.
-    For 'select' columns, ONLY use the allowed values (single value).
-    For 'multiSelect' columns, use allowed values (can be multiple, return as array of strings).
-    For 'rating' columns, use integers 1-5.
-    For 'checkbox' columns, use boolean true/false.
-    If existing data is in Chinese, generate new data in Chinese.
+    User Instruction: "${userInstruction || "Generate realistic data."}"
+
+    Output:
+    Return a STRICT JSON array of objects.
+    Keys MUST match the Column Labels exactly.
+    Values must match the column type.
   `;
 
   const response = await ai.models.generateContent({
@@ -45,24 +160,6 @@ export const generateSmartRows = async (
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: columns.reduce((acc, col) => {
-            if (col.type === 'number' || col.type === 'rating') {
-                acc[col.id] = { type: Type.NUMBER };
-            } else if (col.type === 'checkbox') {
-                acc[col.id] = { type: Type.BOOLEAN };
-            } else if (col.type === 'multiSelect') {
-                acc[col.id] = { type: Type.ARRAY, items: { type: Type.STRING } };
-            } else {
-                acc[col.id] = { type: Type.STRING };
-            }
-            return acc;
-          }, {} as Record<string, any>),
-        },
-      },
     },
   });
 
@@ -70,213 +167,112 @@ export const generateSmartRows = async (
   
   const newRowsRaw = JSON.parse(response.text);
   
-  // Add IDs
-  return newRowsRaw.map((row: any) => ({
-    ...row,
-    id: crypto.randomUUID(),
-  }));
-};
+  // Map Labels back to IDs
+  const labelToId = columns.reduce((acc, col) => {
+      acc[col.label] = col.id;
+      return acc;
+  }, {} as Record<string, string>);
 
-/**
- * Analyzes the current dataset.
- */
-export const analyzeDataset = async (
-  columns: Column[],
-  rows: RowData[]
-): Promise<AnalysisResult> => {
-  const ai = getClient();
-
-  const header = columns.map(c => c.label).join(", ");
-  const dataSample = rows.slice(0, 50).map(row => columns.map(c => row[c.id]).join(", ")).join("\n");
-
-  const prompt = `
-    Analyze the following dataset. 
-    Columns: ${header}
-    Data (first 50 rows):
-    ${dataSample}
-
-    Provide a brief summary, 3 key trends/insights, and the best chart type to visualize this data.
-    Please provide the response in Chinese (Simplified).
-  `;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          summary: { type: Type.STRING },
-          keyTrends: { type: Type.ARRAY, items: { type: Type.STRING } },
-          suggestedChartType: { type: Type.STRING, enum: ["bar", "line", "pie", "area"] }
-        }
-      }
-    }
+  return newRowsRaw.map((row: any) => {
+      const newRow: RowData = { id: crypto.randomUUID() };
+      Object.keys(row).forEach(label => {
+          const colId = labelToId[label];
+          if (colId) {
+              newRow[colId] = row[label];
+          }
+      });
+      return newRow;
   });
-
-  if (!response.text) throw new Error("Analysis failed");
-  return JSON.parse(response.text) as AnalysisResult;
 };
 
 /**
- * Generates a complete system of sheets (tables) based on a user prompt.
- * Supports multiple sheets and relationships.
+ * 4. Analyze Data: Generates insights and charts.
  */
-export const generateSystem = async (userPrompt: string): Promise<{
-    name: string;
-    description?: string;
-    columns: any[];
-    sampleRows: any[];
-}[]> => {
+export const analyzeDataset = async (columns: Column[], rows: RowData[]): Promise<AnalysisResult> => {
   const ai = getClient();
+  
+  // Cap data to avoid token limits
+  const dataSample = JSON.stringify(rows.slice(0, 50)); 
+  const schema = columns.map(c => `${c.label} (${c.type})`).join(', ');
+
   const prompt = `
-    You are an expert database architect and solution designer.
-    User Request: "${userPrompt}"
+    Role: Data Analyst.
+    Task: Analyze the following dataset and provide insights.
     
-    Task: Design a comprehensive spreadsheet system (one or more related tables) to satisfy the request.
+    Schema: ${schema}
+    Data (First 50 rows): ${dataSample}
     
-    Output JSON ONLY with the following structure:
+    Output JSON Format:
     {
-      "sheets": [
-        {
-          "name": "TableName",
-          "description": "Purpose of this table",
-          "columns": [
-            { 
-              "label": "Column Name", 
-              "type": "text|number|select|multiSelect|date|checkbox|rating|person|email|phone|url|image|relation",
-              "options": [{"label": "Option1", "color": "bg-blue-100 text-blue-800"}], // Required for select/multiSelect
-              "targetSheetName": "RelatedTableName" // REQUIRED if type is 'relation'. Must match the 'name' of another sheet in this JSON.
-            }
-          ],
-          "sampleRows": [
-            { "Column Name": "Value" } // Generate 1-3 rows of realistic sample data
-          ]
-        }
-      ]
+      "summary": "A concise paragraph summarizing the dataset.",
+      "keyTrends": ["Trend 1", "Trend 2", "Trend 3"],
+      "suggestedChartType": "bar" | "line" | "pie" | "area"
     }
-    
-    Rules:
-    1. **Analyze Intent**: If the user asks for a system (e.g. "CRM", "Operations Management", "Inventory"), YOU MUST create multiple related tables (e.g. Customers & Deals, Servers & Incidents).
-    2. **Relations**: Use the 'relation' column type to link tables. e.g. An "Orders" table should have a "Customer" relation column.
-    3. **Target Name Matching**: If type is 'relation', 'targetSheetName' MUST exactly match another sheet's "name" in your output.
-    4. **Column Types**: Use 'select' for status/category (provide options), 'person' for assignees, 'date' for timelines, 'number' for metrics.
-    5. **Language**: If the user prompt is in Chinese, generate all Names, Labels, Options and Data in Chinese.
-    6. **Sample Data**: minimal (1-3 rows) but realistic.
   `;
-  
+
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-    }
+    },
   });
 
-  if (!response.text) throw new Error("System generation failed");
-  const data = JSON.parse(response.text);
-  
-  return data.sheets || [];
+  if (!response.text) throw new Error("No analysis generated");
+  return JSON.parse(response.text);
 };
 
 /**
- * Legacy single sheet generation (kept for backward compatibility if needed, but generateSystem is preferred)
+ * 5. Generate Document Content: Generates or refines HTML content for documents.
  */
-export const generateSheetFromPrompt = async (userPrompt: string): Promise<{ columns: Column[], rows: RowData[] }> => {
-   // Re-use the new system generator but just take the first sheet
-   const sheets = await generateSystem(userPrompt);
-   if (sheets.length === 0) throw new Error("No sheet generated");
-   
-   const firstSheet = sheets[0];
-   const columns = firstSheet.columns.map((c: any) => ({
-       id: crypto.randomUUID(),
-       label: c.label,
-       type: c.type,
-       options: c.options
-   }));
-   
-   const rows = firstSheet.sampleRows.map((r: any) => {
-       const row: RowData = { id: crypto.randomUUID() };
-       columns.forEach(c => row[c.id] = r[c.label]);
-       return row;
-   });
-
-   return { columns, rows };
-};
-
-/**
- * Processes a natural language command to modify the sheet structure or data.
- */
-export const processAgentCommand = async (
-  prompt: string,
-  columns: Column[],
-  sheetName: string
-): Promise<{ 
-  type: 'ADD_COLUMN' | 'DELETE_COLUMN' | 'RENAME_COLUMN' | 'FILL_DATA' | 'ANALYZE_DATA' | 'CREATE_SHEET' | 'NONE';
-  data?: any;
-  reply: string;
-}> => {
+export const generateDocumentContent = async (
+  userPrompt: string,
+  currentContent: string,
+  mode: 'create' | 'refine'
+): Promise<string> => {
   const ai = getClient();
-  const schemaContext = columns.map(c => `${c.label} (${c.type})`).join(', ');
   
-  const sysPrompt = `
-  You are an expert spreadsheet agent. You are currently managing a sheet named "${sheetName}".
-  
-  Current Columns Structure: 
-  ${schemaContext}
-  
-  User Input: "${prompt}"
-  
-  Your task is to classify the user's intent and extract parameters to modify the current sheet OR create a new one/system.
-  
-  Supported Actions:
-  
-  1. **ADD_COLUMN**: User wants to add a new column/field to the *current* sheet.
-     - "data": { "label": "Column Name", "columnType": "Type" }
-     - "columnType" must be one of: text, number, select, multiSelect, date, person, checkbox, rating, email, phone, url, location, image.
-     - Infer the best type. e.g. "Add budget" -> number. "Add status" -> select.
-
-  2. **DELETE_COLUMN**: User wants to delete/remove a column from the *current* sheet.
-     - "data": { "label": "Column Name" }
-
-  3. **RENAME_COLUMN**: User wants to rename a column in the *current* sheet.
-     - "data": { "oldLabel": "Old Name", "newLabel": "New Name" }
-
-  4. **FILL_DATA**: User wants to generate sample data or fill rows for the *current* sheet.
-     - "data": { "count": number } (Default to 20 if not specified).
-
-  5. **ANALYZE_DATA**: User wants to analyze insights/charts for the *current* sheet.
-     - "data": {}
-
-  6. **CREATE_SHEET**: User explicitly wants to create a *NEW* separate sheet, table, or a whole system (CRM, ERP, etc).
-     - e.g. "Create a new table for Inventory", "Build a Project Management System", "I need a CRM", "Help me create an operations management table".
-     - Any request that implies starting a new topic or tracking a new entity should be CREATE_SHEET.
-     - "data": { "prompt": "Description of the new sheet/system" }
-
-  7. **NONE**: Conversational replies, explanations, or if the intent is unclear.
-  
-  Response Rules:
-  - If the user mentions "this table" or "this sheet" or "add column", default to modifying the current sheet (ADD_COLUMN, etc).
-  - If the user asks to "create", "build", "make" a new table/system or mentions a specific domain like "Operations Management", use CREATE_SHEET.
-  - Provide a friendly "reply" in Chinese (Simplified).
-  
-  Output JSON format only.
-  `;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: sysPrompt,
-    config: {
-        responseMimeType: "application/json"
-    }
-  });
-  
-  if (!response.text) return { type: 'NONE', reply: "我没听懂，请再说一遍。" };
-  try {
-    return JSON.parse(response.text);
-  } catch (e) {
-    console.error("JSON Parse Error", e);
-    return { type: 'NONE', reply: "处理指令时出错了。" };
+  let prompt = "";
+  if (mode === 'create') {
+      prompt = `
+        Role: Professional Document Writer.
+        Task: Write a document section based on this request: "${userPrompt}".
+        Context: The current document content is: "${currentContent ? currentContent.substring(0, 1000) : ''}..." (truncated).
+        
+        Output:
+        Return HTML formatted content suitable for a WYSIWYG editor (e.g. <h1>, <p>, <ul>, <strong>).
+        Do NOT include <html>, <head>, or <body> tags. Just the body content.
+      `;
+  } else {
+      prompt = `
+        Role: Professional Editor.
+        Task: Refine or edit the following content based on this instruction: "${userPrompt}".
+        
+        Content to Edit:
+        "${currentContent}"
+        
+        Output:
+        Return the rewritten HTML content. Keep the formatting (HTML tags) where appropriate but improve the text.
+        Do NOT include <html>, <head>, or <body> tags. Just the body content.
+      `;
   }
-}
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+
+    if (!response.text) throw new Error("No content generated");
+    
+    // Cleanup markdown code blocks if present
+    let text = response.text;
+    if (text.startsWith('```html')) text = text.replace(/^```html/, '').replace(/```$/, '');
+    else if (text.startsWith('```')) text = text.replace(/^```/, '').replace(/```$/, '');
+    
+    return text.trim();
+  } catch (error) {
+    console.error("Generate Document Error:", error);
+    throw error;
+  }
+};

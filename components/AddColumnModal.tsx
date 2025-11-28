@@ -1,18 +1,19 @@
 
 import React, { useEffect, useState } from 'react';
-import { ColumnType, SelectOption, Column, Sheet } from '../types';
-import { Modal, Form, Input, Select, Button, Alert } from 'antd';
+import { ColumnType, SelectOption, Column, Sheet, RelationConfig } from '../types';
+import { Modal, Form, Input, Select, Button, Radio, Switch, InputNumber, DatePicker } from 'antd';
 import { 
     Type, Hash, List, Calendar, CheckSquare, 
     Link as LinkIcon, Star, Trash2, Plus,
     Image as ImageIcon, FileText, User, Phone, Mail, MapPin,
-    ArrowLeftRight, Tags
+    ArrowLeftRight, Tags, ToggleLeft
 } from 'lucide-react';
+import dayjs from 'dayjs';
 
 interface AddColumnModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (name: string, type: ColumnType, options?: SelectOption[], relationTargetSheetId?: string) => void;
+  onSave: (name: string, type: ColumnType, options?: SelectOption[], relationConfig?: RelationConfig, defaultValue?: any) => void;
   initialData?: Column | null;
   allSheets: Sheet[]; // Needed to select target for relation
   currentSheetId: string;
@@ -28,6 +29,7 @@ const COLUMN_GROUPS = [
             { type: 'number' as ColumnType, label: '数字', icon: <Hash size={16} /> },
             { type: 'date' as ColumnType, label: '日期', icon: <Calendar size={16} /> },
             { type: 'checkbox' as ColumnType, label: '复选框', icon: <CheckSquare size={16} /> },
+            { type: 'switch' as ColumnType, label: '开关', icon: <ToggleLeft size={16} /> },
         ]
     },
     {
@@ -81,28 +83,52 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
   const [newOptionLabel, setNewOptionLabel] = useState('');
   const [newOptionColor, setNewOptionColor] = useState(COLORS[0]);
 
+  // Relation State
+  const [bidirectional, setBidirectional] = useState(true);
+
   useEffect(() => {
     if (isOpen) {
       if (initialData) {
+        let defVal = initialData.defaultValue;
+        if (initialData.type === 'date' && defVal) {
+             defVal = dayjs(defVal);
+        }
+
         form.setFieldsValue({
             label: initialData.label,
             type: initialData.type,
-            targetSheetId: initialData.relationConfig?.targetSheetId
+            targetSheetId: initialData.relationConfig?.targetSheetId,
+            defaultValue: defVal
         });
         setType(initialData.type);
         setOptions(initialData.options || []);
+        setBidirectional(initialData.relationConfig?.bidirectional ?? true);
       } else {
         form.resetFields();
         setType('text');
         setOptions([]);
         setNewOptionLabel('');
+        setBidirectional(true);
       }
     }
   }, [isOpen, initialData, form]);
 
   const handleOk = () => {
     form.validateFields().then(values => {
-        onSave(values.label, type, (type === 'select' || type === 'multiSelect') ? options : undefined, values.targetSheetId);
+        let relationConfig: RelationConfig | undefined = undefined;
+        if (type === 'relation' && values.targetSheetId) {
+            relationConfig = {
+                targetSheetId: values.targetSheetId,
+                bidirectional: bidirectional
+            };
+        }
+        
+        let processedDefaultValue = values.defaultValue;
+        if (type === 'date' && processedDefaultValue) {
+            processedDefaultValue = processedDefaultValue.format('YYYY-MM-DD');
+        }
+
+        onSave(values.label, type, (type === 'select' || type === 'multiSelect') ? options : undefined, relationConfig, processedDefaultValue);
         onClose();
     });
   };
@@ -123,6 +149,60 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
   };
 
   const validTargetSheets = allSheets.filter(s => s.type === 'sheet' && s.id !== currentSheetId);
+
+  const renderDefaultValueInput = () => {
+    switch(type) {
+        case 'text':
+        case 'url':
+        case 'email':
+        case 'phone':
+        case 'location':
+            return <Input placeholder="请输入默认值" />;
+        case 'number':
+        case 'rating':
+             return <InputNumber style={{ width: '100%' }} placeholder="请输入默认数值" />;
+        case 'checkbox':
+        case 'switch':
+             return <Switch checkedChildren="开启" unCheckedChildren="关闭" />;
+        case 'date':
+             return <DatePicker style={{ width: '100%' }} />;
+        case 'select':
+             return (
+                 <Select 
+                    placeholder="选择默认选项" 
+                    allowClear
+                    options={options.map(o => ({
+                        label: (
+                             <div className="flex items-center gap-2">
+                                <div className={`w-3 h-3 rounded-full ${o.color.split(' ')[0]}`} />
+                                {o.label}
+                             </div>
+                        ),
+                        value: o.label
+                    }))}
+                 />
+             );
+         case 'multiSelect':
+              return (
+                 <Select 
+                    mode="multiple" 
+                    placeholder="选择默认选项" 
+                    allowClear
+                    options={options.map(o => ({
+                        label: (
+                             <div className="flex items-center gap-2">
+                                <div className={`w-3 h-3 rounded-full ${o.color.split(' ')[0]}`} />
+                                {o.label}
+                             </div>
+                        ),
+                        value: o.label
+                    }))}
+                 />
+             );
+        default:
+             return <Input placeholder="该类型暂不支持默认值" disabled />;
+    }
+  };
 
   return (
     <Modal
@@ -174,34 +254,48 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
             <div className="bg-white p-4 rounded-lg border border-slate-200 mb-4 shadow-sm space-y-3">
                  <div className="flex items-center gap-2 text-indigo-600 mb-2">
                     <ArrowLeftRight size={16} />
-                    <span className="text-sm font-semibold">关联配置 (双向绑定)</span>
+                    <span className="text-sm font-semibold">关联配置</span>
                  </div>
                  
-                 <Alert 
-                    message="双向关联"
-                    description="当您创建此列时，系统会自动在目标表中也创建一个关联回当前表的列。"
-                    type="info"
-                    showIcon
-                    className="text-xs mb-2"
-                 />
-
                  <Form.Item
                     name="targetSheetId"
                     label="关联到哪个表?"
                     rules={[{ required: true, message: '请选择目标表' }]}
-                    className="mb-0"
+                    className="mb-3"
                  >
-                     <Select placeholder="选择目标工作表...">
-                         {validTargetSheets.map(sheet => (
-                             <Select.Option key={sheet.id} value={sheet.id}>
-                                 <span className="flex items-center gap-2">{sheet.name}</span>
-                             </Select.Option>
-                         ))}
-                     </Select>
+                     <Select 
+                        placeholder="选择目标工作表..."
+                        options={validTargetSheets.map(sheet => ({
+                            label: <span className="flex items-center gap-2">{sheet.name}</span>,
+                            value: sheet.id
+                        }))}
+                     />
                  </Form.Item>
+                 
                  {validTargetSheets.length === 0 && (
-                     <div className="text-xs text-red-400">没有其他可用的工作表。请先创建另一个表。</div>
+                     <div className="text-xs text-red-400 mb-3">没有其他可用的工作表。请先创建另一个表。</div>
                  )}
+
+                 <div className="bg-slate-50 p-3 rounded border border-slate-100">
+                    <div className="flex items-center gap-3 mb-2">
+                        <span className="text-xs font-medium text-slate-600">关联模式:</span>
+                        <Radio.Group 
+                            value={bidirectional} 
+                            onChange={e => setBidirectional(e.target.value)} 
+                            optionType="button" 
+                            buttonStyle="solid" 
+                            size="small"
+                        >
+                            <Radio.Button value={true}>双向关联</Radio.Button>
+                            <Radio.Button value={false}>单向关联</Radio.Button>
+                        </Radio.Group>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                        {bidirectional 
+                            ? "双向关联（推荐）：会在目标表中自动创建对应的关联列，数据在两边表同步显示。" 
+                            : "单向关联：仅在当前表中创建关联列，目标表不会感知此关联，适合简单的引用场景。"}
+                    </p>
+                 </div>
             </div>
         )}
 
@@ -247,6 +341,22 @@ const AddColumnModal: React.FC<AddColumnModalProps> = ({ isOpen, onClose, onSave
                 </div>
              </div>
         )}
+
+        {/* Default Value Config */}
+        {(type !== 'relation' && type !== 'image' && type !== 'file' && type !== 'person') && (
+            <div className="bg-white p-4 rounded-lg border border-slate-200 mb-4 shadow-sm">
+                 <h4 className="text-xs font-semibold text-slate-500 uppercase mb-2">默认值配置</h4>
+                 <Form.Item 
+                    name="defaultValue" 
+                    noStyle 
+                    valuePropName={(type === 'checkbox' || type === 'switch') ? 'checked' : 'value'}
+                 >
+                     {renderDefaultValueInput()}
+                 </Form.Item>
+                 <div className="text-[10px] text-slate-400 mt-2">新创建的行将自动填充此值。</div>
+            </div>
+        )}
+
       </Form>
     </Modal>
   );

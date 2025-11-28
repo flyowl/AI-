@@ -1,15 +1,15 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { AIStatus, ChatMessage, View, ViewType, Sheet } from '../types';
-import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, Table2 } from 'lucide-react';
+import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, Database, Wand2, BarChart3, Settings2, Info } from 'lucide-react';
 import { Tabs, Input, Button, Modal, Select } from 'antd';
+
+export type AIMode = 'create_project' | 'modify_table' | 'fill_data' | 'analyze_data';
 
 interface SidebarProps {
   // Chat Props
   messages: ChatMessage[];
   status: AIStatus;
-  onSendMessage: (text: string, targetSheetId?: string) => void;
-  onQuickAction: (action: 'fill' | 'analyze', targetSheetId?: string) => void;
+  onSendMessage: (text: string, mode: AIMode, targetSheetId?: string) => void;
   
   // Context Props
   sheets: Sheet[];
@@ -24,7 +24,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ 
-    messages, status, onSendMessage, onQuickAction,
+    messages, status, onSendMessage,
     sheets, activeSheetId,
     views, activeViewId, onSwitchView, onCreateView, onDeleteView
 }) => {
@@ -34,14 +34,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [newViewName, setNewViewName] = useState('');
   const [newViewType, setNewViewType] = useState<ViewType>('grid');
   
-  // Target sheet for AI Context
+  // AI Control State
+  const [aiMode, setAiMode] = useState<AIMode>('create_project');
   const [targetSheetId, setTargetSheetId] = useState<string>(activeSheetId);
 
-  // Sync target sheet with active sheet unless AI is busy, but allow manual override
+  // Sync target sheet
   useEffect(() => {
-    // Only auto-switch if the current target is no longer valid or we want to follow user navigation
-    // The requirement says "bound to operation object", which usually means the active one.
-    // We update it when activeSheetId changes.
     if (sheets.find(s => s.id === activeSheetId && s.type === 'sheet')) {
         setTargetSheetId(activeSheetId);
     }
@@ -53,16 +51,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   }, [messages, status]);
 
   const handleSend = () => {
-    if (!input.trim()) return;
-    onSendMessage(input, targetSheetId);
+    if (!input.trim() && aiMode !== 'analyze_data') return; // Analyze might not need text
+    onSendMessage(input, aiMode, targetSheetId);
     setInput('');
-  };
-
-  const handleKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-    }
   };
 
   const renderViewIcon = (type: ViewType) => {
@@ -73,39 +64,59 @@ const Sidebar: React.FC<SidebarProps> = ({
       }
   }
 
-  // Filter only actual sheets for the dropdown
   const validSheets = sheets.filter(s => s.type === 'sheet');
+
+  const getModeInfo = () => {
+      switch(aiMode) {
+          case 'create_project': return { placeholder: '描述你想创建的系统，如：简单的 CRM...', hint: '生成多张关联表格' };
+          case 'modify_table': return { placeholder: '如：添加一列“优先级”，类型为单选...', hint: '修改当前表结构' };
+          case 'fill_data': return { placeholder: '如：生成 20 条关于科技公司的模拟数据...', hint: '智能填充数据 (参考表结构)' };
+          case 'analyze_data': return { placeholder: '如：分析销售额趋势，推荐图表...', hint: '生成图表与洞察' };
+      }
+  };
+  
+  const modeInfo = getModeInfo();
 
   const items = [
     {
       key: 'chat',
       label: <span className="flex items-center gap-2"><Sparkles size={14}/> AI 助手</span>,
       children: (
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col h-full bg-slate-50/50">
              {/* Chat Messages Area */}
              <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {messages.length === 0 && (
-                    <div className="text-center mt-10 opacity-60">
-                        <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-3 text-indigo-600">
+                    <div className="text-center mt-8 px-4">
+                        <div className="w-12 h-12 bg-white border border-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-indigo-600 shadow-sm">
                             <Bot size={24} />
                         </div>
-                        <p className="text-slate-500 text-sm">你好！我是你的智能表格助手。<br/>我可以帮你生成数据、分析趋势，或者创建新表。</p>
-                        <div className="mt-4 flex flex-col gap-2 text-xs text-indigo-500">
-                            <span className="cursor-pointer hover:underline" onClick={() => setInput('帮我创建一个运维管理表')}>“帮我创建一个运维管理表”</span>
-                            <span className="cursor-pointer hover:underline" onClick={() => setInput('给当前表添加一列状态')}>“给当前表添加一列状态”</span>
+                        <h3 className="text-sm font-semibold text-slate-800 mb-1">我是你的智能表格助手</h3>
+                        <p className="text-xs text-slate-500 mb-6 leading-relaxed">请在下方选择功能模式，我可以帮你搭建系统、修改结构、填充数据或分析报表。</p>
+                        
+                        <div className="grid grid-cols-2 gap-2 text-left">
+                            <div onClick={() => { setAiMode('create_project'); setInput('创建一个进销存管理系统'); }} className="p-3 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all">
+                                <div className="text-indigo-600 mb-1"><Database size={16}/></div>
+                                <div className="text-xs font-medium text-slate-700">创建项目</div>
+                                <div className="text-[10px] text-slate-400">生成多表系统</div>
+                            </div>
+                             <div onClick={() => { setAiMode('fill_data'); setInput('帮我生成 20 条测试数据'); }} className="p-3 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all">
+                                <div className="text-pink-500 mb-1"><Wand2 size={16}/></div>
+                                <div className="text-xs font-medium text-slate-700">填充数据</div>
+                                <div className="text-[10px] text-slate-400">智能生成内容</div>
+                            </div>
                         </div>
                     </div>
                 )}
                 
                 {messages.map((msg) => (
                     <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-slate-200 text-slate-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 border ${msg.role === 'user' ? 'bg-white border-slate-200 text-slate-600' : 'bg-indigo-600 border-indigo-600 text-white'}`}>
                             {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
                         </div>
-                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
                             msg.role === 'user' 
-                                ? 'bg-indigo-600 text-white rounded-tr-sm' 
-                                : 'bg-white border border-slate-200 text-slate-700 rounded-tl-sm shadow-sm'
+                                ? 'bg-slate-800 text-white rounded-tr-sm' 
+                                : 'bg-white border border-slate-200 text-slate-700 rounded-tl-sm'
                         }`}>
                             <div className="whitespace-pre-wrap">{msg.content}</div>
                         </div>
@@ -114,14 +125,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                 
                 {status === AIStatus.LOADING && (
                      <div className="flex gap-3">
-                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                        <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
                             <Bot size={14} />
                         </div>
                         <div className="bg-white border border-slate-200 px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm">
-                            <div className="flex gap-1.5">
-                                <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                                <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                                <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                            <div className="flex gap-1.5 items-center">
+                                <span className="text-xs text-slate-500 mr-2">正在思考...</span>
+                                <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                                <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
                             </div>
                         </div>
                     </div>
@@ -129,39 +141,47 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <div ref={messagesEndRef} />
              </div>
 
-             {/* Quick Actions & Input */}
-             <div className="p-4 bg-white border-t border-slate-200">
-                {/* Target Sheet Selector */}
-                <div className="mb-3 flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-100">
-                     <span className="text-xs text-slate-500 whitespace-nowrap">操作对象:</span>
-                     <Select
-                        size="small"
-                        value={targetSheetId}
-                        onChange={setTargetSheetId}
-                        className="flex-1"
-                        variant="borderless"
-                        options={validSheets.map(s => ({ 
-                            label: <span className="flex items-center gap-2"><Table2 size={14} className="text-indigo-500"/> {s.name}</span>, 
-                            value: s.id 
-                        }))}
-                        popupMatchSelectWidth={false}
-                     />
+             {/* Functional Input Area */}
+             <div className="p-4 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                
+                {/* 1. Mode Selector */}
+                <div className="mb-3">
+                    <Select
+                        value={aiMode}
+                        onChange={setAiMode}
+                        className="w-full"
+                        options={[
+                            { value: 'create_project', label: <span className="flex items-center gap-2"><Database size={14} className="text-purple-500"/> 创建项目 (多表)</span> },
+                            { value: 'modify_table', label: <span className="flex items-center gap-2"><Settings2 size={14} className="text-blue-500"/> 单表处理 (修改结构)</span> },
+                            { value: 'fill_data', label: <span className="flex items-center gap-2"><Wand2 size={14} className="text-pink-500"/> 填充数据 (当前表)</span> },
+                            { value: 'analyze_data', label: <span className="flex items-center gap-2"><BarChart3 size={14} className="text-orange-500"/> 分析数据 (当前表)</span> },
+                        ]}
+                    />
                 </div>
 
-                {messages.length < 2 && (
-                    <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
-                        <button onClick={() => onQuickAction('fill', targetSheetId)} className="whitespace-nowrap px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-medium border border-indigo-100 hover:bg-indigo-100 transition-colors">
-                            ✨ 智能填充
-                        </button>
-                        <button onClick={() => onQuickAction('analyze', targetSheetId)} className="whitespace-nowrap px-3 py-1.5 bg-green-50 text-green-700 rounded-full text-xs font-medium border border-green-100 hover:bg-green-100 transition-colors">
-                            📊 分析数据
-                        </button>
+                {/* 2. Target Selector (Only for Single Table Modes) */}
+                {aiMode !== 'create_project' && (
+                    <div className="mb-3 flex items-center gap-2 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                         <span className="text-[10px] text-slate-400 uppercase tracking-wider">目标:</span>
+                         <Select
+                            size="small"
+                            value={targetSheetId}
+                            onChange={setTargetSheetId}
+                            className="flex-1 text-xs"
+                            variant="borderless"
+                            options={validSheets.map(s => ({ 
+                                label: <span className="flex items-center gap-2 text-slate-700">{s.name}</span>, 
+                                value: s.id 
+                            }))}
+                            popupMatchSelectWidth={false}
+                         />
                     </div>
                 )}
-                
+
+                {/* 3. Input */}
                 <div className="relative">
                     <Input.TextArea
-                        autoSize={{ minRows: 1, maxRows: 4 }}
+                        autoSize={{ minRows: 2, maxRows: 6 }}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -170,16 +190,23 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 handleSend();
                             }
                         }}
-                        placeholder="输入指令 (如：添加一列邮箱)..."
-                        className="pr-10 rounded-xl py-2.5 resize-none"
+                        placeholder={modeInfo.placeholder}
+                        className="pr-10 rounded-xl py-2.5 resize-none bg-slate-50 focus:bg-white text-sm"
                     />
                     <button 
                         onClick={handleSend}
-                        disabled={!input.trim() || status === AIStatus.LOADING}
-                        className="absolute right-2 bottom-2 p-1.5 bg-indigo-600 text-white rounded-lg disabled:opacity-50 disabled:bg-slate-300 hover:bg-indigo-700 transition-colors z-10"
+                        disabled={(!input.trim() && aiMode !== 'analyze_data') || status === AIStatus.LOADING}
+                        className="absolute right-2 bottom-2 p-1.5 bg-indigo-600 text-white rounded-lg disabled:opacity-50 disabled:bg-slate-300 hover:bg-indigo-700 transition-colors z-10 shadow-sm"
                     >
                         <Send size={14} />
                     </button>
+                </div>
+                
+                <div className="mt-2 flex justify-between items-center px-1">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                        <Info size={10}/> {modeInfo.hint}
+                    </span>
+                    <span className="text-[10px] text-slate-300">Gemini 2.5 Flash</span>
                 </div>
              </div>
         </div>

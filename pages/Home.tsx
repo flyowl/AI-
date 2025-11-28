@@ -1,9 +1,9 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
-import { Project } from '../types';
-import { loadProjects, saveProject, deleteProject, toggleProjectStar } from '../services/db';
+import { Project, Sheet, View } from '../types';
+import { loadProjects, saveProject, deleteProject, toggleProjectStar, syncProjectSheets } from '../services/db';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Plus, MoreHorizontal, FileSpreadsheet, ChevronDown, Check, Trash2, Star } from 'lucide-react';
+import { Plus, MoreHorizontal, FileSpreadsheet, ChevronDown, Check, Trash2, Star, Table2, FileText } from 'lucide-react';
 import { Dropdown, message, Input, Modal, MenuProps, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
@@ -12,12 +12,25 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 dayjs.locale('zh-cn');
 
+// Default view config for new spreadsheets
+const DEFAULT_GRID_VIEW: View = {
+    id: 'view-default',
+    name: '表格视图',
+    type: 'grid',
+    config: {
+        filters: [],
+        filterMatchType: 'and',
+        sortRule: null,
+        groupBy: null,
+        hiddenColumnIds: [],
+        rowHeight: 'medium'
+    }
+};
+
 const Home: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const navigate = useNavigate();
   const location = useLocation();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
 
   // Sort State
   const [sortField, setSortField] = useState<'name' | 'updatedAt' | 'createdAt'>('updatedAt');
@@ -27,21 +40,51 @@ const Home: React.FC = () => {
     loadProjects().then(setProjects);
   }, [location.pathname]);
 
-  const handleCreateProject = async () => {
-      if (!newProjectName.trim()) return;
+  const handleCreateProject = async (type: 'spreadsheet' | 'document') => {
+      const newProjectId = crypto.randomUUID();
       const newProject: Project = {
-          id: crypto.randomUUID(),
-          name: newProjectName,
+          id: newProjectId,
+          name: type === 'spreadsheet' ? '未命名多维表格' : '未命名项目文档',
           updatedAt: Date.now(),
           createdAt: Date.now(),
           owner: 'Me',
-          description: 'New Project'
+          description: type === 'spreadsheet' ? '数据管理' : '知识库与文档',
+          projectType: type
       };
+
+      // Create Initial Content based on Type
+      let initialSheet: Sheet;
+
+      if (type === 'spreadsheet') {
+          initialSheet = {
+            id: crypto.randomUUID(),
+            name: '工作表 1',
+            type: 'sheet',
+            columns: [{ id: crypto.randomUUID(), label: '列 1', type: 'text' }],
+            rows: [],
+            views: [{ ...DEFAULT_GRID_VIEW, id: crypto.randomUUID() }],
+            activeViewId: '', 
+            selectedRowIds: new Set()
+          };
+          initialSheet.activeViewId = initialSheet.views[0].id;
+      } else {
+          // Document Mode: Pure Document Node
+          initialSheet = {
+            id: crypto.randomUUID(),
+            name: '首页',
+            type: 'document',
+            content: '<h1>欢迎使用项目文档</h1><p>点击此处开始编辑...</p>',
+            columns: [], rows: [], views: [], activeViewId: '', selectedRowIds: new Set()
+          };
+      }
+
+      // Save to DB
       await saveProject(newProject);
-      setProjects([newProject, ...projects]);
-      setIsModalOpen(false);
-      setNewProjectName('');
-      navigate(`/project/${newProject.id}`);
+      await syncProjectSheets(newProjectId, [initialSheet]);
+
+      // Navigate immediately
+      navigate(`/project/${newProjectId}`);
+      message.success(type === 'spreadsheet' ? '多维表格已创建' : '项目文档已创建');
   };
 
   const handleDeleteProject = async (id: string) => {
@@ -140,6 +183,23 @@ const Home: React.FC = () => {
     ]}
   ];
 
+  const createMenu: MenuProps['items'] = [
+      {
+          key: 'sheet',
+          label: <span className="font-medium">多维表格</span>,
+          icon: <Table2 size={16} className="text-green-500" />,
+          onClick: () => handleCreateProject('spreadsheet'),
+          extra: <span className="text-xs text-slate-400 ml-2">Data</span>
+      },
+      {
+          key: 'doc',
+          label: <span className="font-medium">项目文档</span>,
+          icon: <FileText size={16} className="text-blue-500" />,
+          onClick: () => handleCreateProject('document'),
+          extra: <span className="text-xs text-slate-400 ml-2">Wiki</span>
+      }
+  ];
+
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-500">
         <div className="flex items-center justify-between mb-8">
@@ -156,16 +216,18 @@ const Home: React.FC = () => {
 
         {/* Project Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {/* Create New Card */}
-            <div 
-                onClick={() => setIsModalOpen(true)}
-                className="group h-48 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/30 transition-all"
-            >
-                <div className="w-12 h-12 bg-indigo-50 text-indigo-500 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                    <Plus size={24} />
+            {/* Create New Card - Updated with Dropdown */}
+            <Dropdown menu={{ items: createMenu }} trigger={['click']} placement="bottom">
+                <div 
+                    className="group h-48 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/30 transition-all"
+                >
+                    <div className="w-12 h-12 bg-indigo-50 text-indigo-500 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform shadow-sm">
+                        <Plus size={24} />
+                    </div>
+                    <span className="font-medium text-slate-600 group-hover:text-indigo-600 transition-colors">新建未命名文件</span>
+                    <span className="text-xs text-slate-400 mt-1">点击选择类型</span>
                 </div>
-                <span className="font-medium text-slate-600">新建未命名文件</span>
-            </div>
+            </Dropdown>
 
             {sortedProjects.map(project => (
                 <div 
@@ -173,17 +235,15 @@ const Home: React.FC = () => {
                     onClick={() => navigate(`/project/${project.id}`)}
                     className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-lg transition-all cursor-pointer flex flex-col h-48 relative"
                 >
-                    <div className="flex-1 bg-slate-50 p-4 relative overflow-hidden">
-                        {/* Thumbnail simulation */}
-                        <div className="absolute inset-4 bg-white rounded-lg shadow-sm border border-slate-100 flex items-start p-2 gap-2 opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all origin-top-left">
-                             <div className="w-1/3 h-2 bg-slate-100 rounded mb-1"></div>
-                             <div className="w-1/3 h-2 bg-slate-100 rounded mb-1"></div>
-                             <div className="w-full h-full flex flex-col gap-1 mt-2">
-                                <div className="w-full h-1 bg-slate-50 rounded"></div>
-                                <div className="w-3/4 h-1 bg-slate-50 rounded"></div>
-                                <div className="w-1/2 h-1 bg-slate-50 rounded"></div>
-                             </div>
-                        </div>
+                    <div className="flex-1 bg-slate-50 p-4 relative overflow-hidden flex items-center justify-center">
+                        {/* Type Icon Indicator */}
+                        <div className={`absolute inset-0 opacity-5 bg-gradient-to-br ${project.projectType === 'document' ? 'from-blue-400 to-cyan-300' : 'from-green-400 to-emerald-300'}`}></div>
+                        
+                        {project.projectType === 'document' ? (
+                            <FileText size={48} className="text-blue-200 group-hover:text-blue-400 transition-colors" />
+                        ) : (
+                            <Table2 size={48} className="text-green-200 group-hover:text-green-400 transition-colors" />
+                        )}
                         
                         {/* Star Button */}
                         <div 
@@ -195,7 +255,10 @@ const Home: React.FC = () => {
                     </div>
                     <div className="p-3 bg-white border-t border-slate-100 flex flex-col justify-center">
                         <div className="flex items-center justify-between mb-1">
-                            <h3 className="font-medium text-slate-800 truncate pr-2 flex-1" title={project.name}>{project.name}</h3>
+                            <h3 className="font-medium text-slate-800 truncate pr-2 flex-1 flex items-center gap-2" title={project.name}>
+                                {project.projectType === 'document' ? <FileText size={14} className="text-blue-500"/> : <Table2 size={14} className="text-green-500"/>}
+                                {project.name}
+                            </h3>
                             <Dropdown menu={{ items: [{ key: 'del', label: '删除', icon: <Trash2 size={14}/>, danger: true, onClick: () => handleDeleteProject(project.id) }] }}>
                                 <div onClick={e => e.stopPropagation()} className="p-1 hover:bg-slate-100 rounded text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <MoreHorizontal size={14} />
@@ -214,12 +277,12 @@ const Home: React.FC = () => {
 
         {/* Bottom promo / CTA area - Only show on Home */}
         {location.pathname === '/' && (
-            <div className="mt-12 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl p-8 text-white flex items-center justify-between shadow-xl">
+            <div className="mt-12 bg-gradient-to-r from-indigo-50 to-purple-600 rounded-2xl p-8 text-white flex items-center justify-between shadow-xl">
                  <div>
-                     <h2 className="text-2xl font-bold mb-2">欢迎使用 Calicat 智能表格</h2>
+                     <h2 className="text-2xl font-bold mb-2">欢迎使用 Calicat 智能办公</h2>
                      <p className="text-indigo-100 max-w-xl text-sm leading-relaxed opacity-90">
-                         Calicat 是下一代智能多维表格系统。利用 AI 技术，您可以一键生成数据、分析报表、构建业务系统。
-                         体验前所未有的效率提升。
+                         Calicat 融合了即时文档与智能表格。无论您是需要撰写复杂的项目文档，还是管理庞大的数据业务，
+                         这里都有适合您的工具。
                      </p>
                      <div className="mt-4 flex gap-3">
                          <button className="px-4 py-2 bg-white text-indigo-600 rounded-lg text-sm font-semibold hover:bg-indigo-50 transition-colors">查看教程</button>
@@ -234,26 +297,6 @@ const Home: React.FC = () => {
                  </div>
             </div>
         )}
-
-        <Modal
-            title="新建项目"
-            open={isModalOpen}
-            onOk={handleCreateProject}
-            onCancel={() => setIsModalOpen(false)}
-            okText="创建"
-            cancelText="取消"
-        >
-            <div className="py-4">
-                <label className="block text-sm font-medium text-slate-700 mb-2">项目名称</label>
-                <Input 
-                    value={newProjectName} 
-                    onChange={e => setNewProjectName(e.target.value)} 
-                    placeholder="例如：2025 市场营销计划" 
-                    onPressEnter={handleCreateProject}
-                    autoFocus
-                />
-            </div>
-        </Modal>
     </div>
   );
 };

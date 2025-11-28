@@ -38,7 +38,10 @@ const ViewToolbar: React.FC<ViewToolbarProps> = ({ view, columns, onUpdateConfig
           // If column changes, reset operator and value defaults
           if (updates.columnId && updates.columnId !== f.columnId) {
               const newCol = columns.find(c => c.id === updates.columnId);
-              return { ...f, ...updates, operator: newCol?.type === 'number' ? 'equals' : 'contains', value: '' };
+              let defaultOp: FilterOperator = 'contains';
+              if (newCol?.type === 'number' || newCol?.type === 'checkbox' || newCol?.type === 'switch') defaultOp = 'equals';
+              
+              return { ...f, ...updates, operator: defaultOp, value: '' };
           }
           return { ...f, ...updates };
       })
@@ -72,7 +75,7 @@ const ViewToolbar: React.FC<ViewToolbarProps> = ({ view, columns, onUpdateConfig
             ...base
         ];
     }
-    if (col.type === 'checkbox') {
+    if (col.type === 'checkbox' || col.type === 'switch') {
         return [
              { label: '是', value: 'equals' },
              ...base
@@ -196,7 +199,7 @@ const ViewToolbar: React.FC<ViewToolbarProps> = ({ view, columns, onUpdateConfig
   const renderGroupContent = () => {
       // Filter columns that make sense for grouping
       const groupableColumns = columns.filter(c => 
-        ['select', 'checkbox', 'text', 'person', 'date'].includes(c.type)
+        ['select', 'checkbox', 'switch', 'text', 'person', 'date'].includes(c.type)
       );
 
       return (
@@ -332,13 +335,17 @@ const FilterValueInput: React.FC<{ filter: Filter, column: Column, onChange: (va
             />
         );
     }
-    if (column.type === 'checkbox') {
+    if (column.type === 'checkbox' || column.type === 'switch') {
+         const isSwitch = column.type === 'switch';
          return (
              <Select
                  value={String(filter.value)}
                  onChange={val => onChange(val === 'true')}
                  className="w-full"
-                 options={[{ label: '已选中', value: 'true' }, { label: '未选中', value: 'false' }]}
+                 options={[
+                     { label: isSwitch ? '开启' : '已选中', value: 'true' }, 
+                     { label: isSwitch ? '关闭' : '未选中', value: 'false' }
+                 ]}
              />
          )
     }

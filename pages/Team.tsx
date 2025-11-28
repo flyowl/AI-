@@ -167,26 +167,26 @@ const Team: React.FC = () => {
                     label="分配角色" 
                     initialValue="Editor"
                 >
-                    <Select>
-                        <Select.Option value="Admin">
+                    <Select options={[
+                        { value: 'Admin', label: (
                              <div className="flex flex-col py-1">
                                  <span className="font-medium">管理员 (Admin)</span>
                                  <span className="text-xs text-slate-400">拥有团队所有权限，可以管理成员和计费。</span>
                              </div>
-                        </Select.Option>
-                        <Select.Option value="Editor">
+                        )},
+                        { value: 'Editor', label: (
                              <div className="flex flex-col py-1">
                                  <span className="font-medium">编辑者 (Editor)</span>
                                  <span className="text-xs text-slate-400">可以创建、编辑和删除文件。</span>
                              </div>
-                        </Select.Option>
-                        <Select.Option value="Viewer">
+                        )},
+                        { value: 'Viewer', label: (
                              <div className="flex flex-col py-1">
                                  <span className="font-medium">查看者 (Viewer)</span>
                                  <span className="text-xs text-slate-400">仅可以查看和评论文件，无法编辑。</span>
                              </div>
-                        </Select.Option>
-                    </Select>
+                        )}
+                    ]} />
                 </Form.Item>
              </Form>
         </Modal>
