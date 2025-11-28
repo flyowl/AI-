@@ -10,7 +10,7 @@ import {
 import { Select, DatePicker, Checkbox, Rate, Image as AntImage, Tooltip, Avatar, InputNumber, Switch, Input, message } from 'antd';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
-import { VariableSizeList as List } from 'react-window';
+import { FixedSizeList as List } from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
 
 dayjs.locale('zh-cn');
@@ -520,9 +520,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
           newSet.add(groupKey);
       }
       setCollapsedGroups(newSet);
-      if (listRef.current) {
-          listRef.current.resetAfterIndex(0);
-      }
+      // FixedSizeList does not need resetAfterIndex as item size is fixed per render
   };
 
   // --- Flatten Data for Virtualization ---
@@ -566,9 +564,8 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   
   const totalWidth = useMemo(() => visibleColumns.reduce((acc, col) => acc + getColWidth(col), 0) + 50, [visibleColumns, getColWidth]);
 
-  const itemSize = (index: number) => {
-      const item = flatData[index];
-      if (item.type === 'group') return 36;
+  const getItemSize = () => {
+      // Group header height matches row height for FixedSizeList compatibility
       switch (rowHeight) {
           case 'small': return 32;
           case 'large': return 48;
@@ -762,7 +759,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                         ref={listRef}
                         height={height}
                         itemCount={flatData.length}
-                        itemSize={itemSize}
+                        itemSize={getItemSize()}
                         width={width}
                         itemData={{
                             flatData,

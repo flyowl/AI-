@@ -4,7 +4,7 @@ import { Sheet } from '../types';
 import { 
   Plus, Table2, Folder, Import, 
   Search, MoreHorizontal, ChevronDown, ChevronRight,
-  FolderOpen, Trash2, Edit2
+  FolderOpen, Trash2, Edit2, Download
 } from 'lucide-react';
 import { Dropdown, Input, MenuProps, message, Button } from 'antd';
 
@@ -67,6 +67,32 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       };
       reader.readAsText(file);
       if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleExport = () => {
+      try {
+          // Serialize data, converting Sets to Arrays
+          const exportData = sheets.map(s => ({
+              ...s,
+              selectedRowIds: Array.from(s.selectedRowIds || [])
+          }));
+          
+          const dataStr = JSON.stringify(exportData, null, 2);
+          const blob = new Blob([dataStr], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          link.download = `calicat_backup_${dateStr}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          message.success('导出成功');
+      } catch (e) {
+          console.error(e);
+          message.error('导出失败');
+      }
   };
 
   const startRename = (sheet: Sheet) => {
@@ -219,6 +245,7 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       { key: 'sheet', label: '新建工作表', icon: <Table2 size={14}/>, onClick: onAddSheet },
       { key: 'folder', label: '新建文件夹', icon: <Folder size={14}/>, onClick: onAddFolder },
       { type: 'divider' },
+      { key: 'export', label: '导出数据 (JSON)', icon: <Download size={14}/>, onClick: handleExport },
       { key: 'import', label: '导入数据 (JSON)', icon: <Import size={14}/>, onClick: () => fileInputRef.current?.click() },
   ];
 
@@ -238,7 +265,7 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
             
             <Dropdown menu={{ items: addMenu }} trigger={['click']}>
                 <Button block type="dashed" size="small" icon={<Plus size={14}/>} className="text-slate-600 border-slate-300">
-                    新建
+                    新建 / 管理
                 </Button>
             </Dropdown>
             <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileUpload} />
