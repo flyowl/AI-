@@ -1,4 +1,5 @@
 
+
 import React from 'react';
 import { Column, RowData } from '../types';
 import { Image as ImageIcon, Plus } from 'lucide-react';
@@ -8,9 +9,10 @@ interface GalleryGridProps {
   rows: RowData[];
   onCardClick: (rowId: string) => void;
   onAddClick: () => void;
+  canEditData: boolean;
 }
 
-const GalleryGrid: React.FC<GalleryGridProps> = ({ columns, rows, onCardClick, onAddClick }) => {
+const GalleryGrid: React.FC<GalleryGridProps> = ({ columns, rows, onCardClick, onAddClick, canEditData }) => {
   const imageCol = columns.find(c => c.type === 'image');
   const titleCol = columns.find(c => c.type === 'text') || columns[0];
   const subtitleCol = columns.find(c => c.id !== titleCol.id && (c.type === 'text' || c.type === 'select'));
@@ -56,15 +58,17 @@ const GalleryGrid: React.FC<GalleryGridProps> = ({ columns, rows, onCardClick, o
             ))}
             
             {/* Add New Placeholder */}
-            <div 
-                onClick={onAddClick}
-                className="border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center h-72 text-slate-400 hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50/30 transition-all cursor-pointer group"
-            >
-                <div className="w-12 h-12 rounded-full bg-slate-50 group-hover:bg-white flex items-center justify-center mb-3 shadow-sm group-hover:scale-110 transition-transform">
-                     <Plus size={24} />
+            {canEditData && (
+                <div 
+                    onClick={onAddClick}
+                    className="border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center h-72 text-slate-400 hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50/30 transition-all cursor-pointer group"
+                >
+                    <div className="w-12 h-12 rounded-full bg-slate-50 group-hover:bg-white flex items-center justify-center mb-3 shadow-sm group-hover:scale-110 transition-transform">
+                        <Plus size={24} />
+                    </div>
+                    <span className="text-sm font-medium">添加新项</span>
                 </div>
-                <span className="text-sm font-medium">添加新项</span>
-            </div>
+            )}
         </div>
     </div>
   );

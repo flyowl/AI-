@@ -1,4 +1,5 @@
 
+
 import React, { useState, useRef } from 'react';
 import { Sheet } from '../types';
 import { 
@@ -11,6 +12,7 @@ import { Dropdown, Input, MenuProps, message, Button } from 'antd';
 interface NavigationSidebarProps {
   sheets: Sheet[];
   activeSheetId: string;
+  canManageSheets: boolean; // Replaced currentUserRole with capability flag
   onSwitchSheet: (id: string) => void;
   onAddSheet: () => void;
   onAddFolder: () => void;
@@ -31,6 +33,7 @@ interface DragState {
 const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
   sheets,
   activeSheetId,
+  canManageSheets,
   onSwitchSheet,
   onAddSheet,
   onAddFolder,
@@ -110,12 +113,14 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
 
   // --- Drag and Drop Handlers ---
   const handleDragStart = (e: React.DragEvent, id: string) => {
+      if (!canManageSheets) return;
       e.dataTransfer.effectAllowed = 'move';
       setDragState(prev => ({ ...prev, isDragging: true, dragId: id }));
   };
 
   const handleDragOver = (e: React.DragEvent, id: string, type: string) => {
       e.preventDefault();
+      if (!canManageSheets) return;
       if (dragState.dragId === id) return;
 
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -139,6 +144,7 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
 
   const handleDrop = (e: React.DragEvent, targetId: string) => {
       e.preventDefault();
+      if (!canManageSheets) return;
       if (dragState.dragId && dragState.dropPosition) {
           onMoveSheet(dragState.dragId, targetId, dragState.dropPosition);
       }
@@ -174,7 +180,7 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
           return (
               <div key={item.id} style={{ paddingLeft: level === 0 ? 0 : 12 }}>
                   <div
-                      draggable
+                      draggable={canManageSheets}
                       onDragStart={(e) => handleDragStart(e, item.id)}
                       onDragOver={(e) => handleDragOver(e, item.id, item.type)}
                       onDrop={(e) => handleDrop(e, item.id)}
@@ -221,14 +227,16 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
                           )}
                       </div>
 
-                      <Dropdown menu={{ items: menuItems }} trigger={['click']}>
-                          <div 
-                            className="p-1 rounded hover:bg-slate-200 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={e => e.stopPropagation()}
-                          >
-                              <MoreHorizontal size={14} />
-                          </div>
-                      </Dropdown>
+                      {canManageSheets && (
+                          <Dropdown menu={{ items: menuItems }} trigger={['click']}>
+                              <div 
+                                className="p-1 rounded hover:bg-slate-200 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={e => e.stopPropagation()}
+                              >
+                                  <MoreHorizontal size={14} />
+                              </div>
+                          </Dropdown>
+                      )}
                   </div>
 
                   {item.type === 'folder' && item.isOpen && (
@@ -263,11 +271,13 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
                 />
             </div>
             
-            <Dropdown menu={{ items: addMenu }} trigger={['click']}>
-                <Button block type="dashed" size="small" icon={<Plus size={14}/>} className="text-slate-600 border-slate-300">
-                    新建 / 管理
-                </Button>
-            </Dropdown>
+            {canManageSheets && (
+                <Dropdown menu={{ items: addMenu }} trigger={['click']}>
+                    <Button block type="dashed" size="small" icon={<Plus size={14}/>} className="text-slate-600 border-slate-300">
+                        新建 / 管理
+                    </Button>
+                </Dropdown>
+            )}
             <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileUpload} />
         </div>
 

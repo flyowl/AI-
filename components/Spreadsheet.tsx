@@ -1,3 +1,5 @@
+
+
 import React, { useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import { Column, RowData, SortRule, RowHeight, Sheet } from '../types';
 import { 
@@ -10,10 +12,12 @@ import {
 import { Select, DatePicker, Checkbox, Rate, Image as AntImage, Tooltip, Avatar, InputNumber, Switch, Input, message } from 'antd';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
-import { FixedSizeList as List } from 'react-window';
+import * as ReactWindow from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
 
 dayjs.locale('zh-cn');
+
+const FixedSizeList = (ReactWindow as any).FixedSizeList;
 
 interface ListChildComponentProps<T = any> {
   index: number;
@@ -32,8 +36,13 @@ interface SpreadsheetProps {
   groupBy: string | null;
   rowHeight: RowHeight;
   hiddenColumnIds: Set<string>;
+  readonlyColumnIds?: Set<string>; // New prop
   allSheets: Sheet[]; 
   
+  // Updated: use capability flags
+  canEditData: boolean;
+  canEditSchema: boolean;
+
   onCellChange: (rowId: string, colId: string, value: any) => void;
   onCellsChange?: (updates: {rowId: string, colId: string, value: any}[]) => void; // New prop for batch updates
   onDeleteRow: (rowId: string) => void;
@@ -51,6 +60,8 @@ interface SpreadsheetProps {
 
   // New Prop for Paste
   onPaste?: (data: string[][], targetRowId: string | null, targetColId: string | null, pasteRange?: { rowIds: string[], colIds: string[] }) => void;
+  // New Prop for Resize
+  onColumnResize?: (colId: string, newWidth: number) => void;
 
   // State updaters
   onFiltersChange: (filters: any[]) => void;
@@ -106,10 +117,15 @@ interface ItemData {
     onCellMouseDown: (rowId: string, colId: string, rowIndex: number, colIndex: number, e: React.MouseEvent) => void;
     onCellMouseEnter: (rowId: string, colId: string, rowIndex: number, colIndex: number) => void;
     onCellContextMenu: (rowId: string, colId: string, e: React.MouseEvent) => void;
+    
+    // Permissions
+    canEditData: boolean;
+    canEditSchema: boolean;
+    readonlyColumnIds: Set<string>;
 }
 
 // Editable Text Cell Component to prevent focus loss
-const EditableTextCell = ({ value, onChange, placeholder, isSelected }: { value: any, onChange: (val: any) => void, placeholder?: string, isSelected: boolean }) => {
+const EditableTextCell = ({ value, onChange, placeholder, isSelected, disabled }: { value: any, onChange: (val: any) => void, placeholder?: string, isSelected: boolean, disabled?: boolean }) => {
     const [localValue, setLocalValue] = useState(value);
     
     useEffect(() => {
@@ -118,23 +134,24 @@ const EditableTextCell = ({ value, onChange, placeholder, isSelected }: { value:
 
     return (
         <Input 
+            readOnly={disabled} // Use readOnly instead of disabled for text to keep color
             bordered={false} 
             value={localValue} 
             onChange={e => setLocalValue(e.target.value)} 
             onBlur={() => {
-                if (localValue !== value) onChange(localValue);
+                if (localValue !== value && !disabled) onChange(localValue);
             }}
             onPressEnter={(e) => {
                 e.currentTarget.blur();
             }}
-            className={`w-full h-full text-xs px-3 rounded-none ${isSelected ? 'bg-transparent' : ''}`}
+            className={`w-full h-full text-xs px-3 rounded-none ${isSelected ? 'bg-transparent' : ''} ${disabled ? 'cursor-default text-slate-600' : ''}`}
             placeholder={placeholder}
         />
     );
 };
 
 // Refined Image Cell with Preview
-const ImageCell: React.FC<{ value: any, onChange: (val: any) => void }> = ({ value, onChange }) => {
+const ImageCell: React.FC<{ value: any, onChange: (val: any) => void, disabled?: boolean }> = ({ value, onChange, disabled }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const ImageComponent = AntImage as any;
 
@@ -169,42 +186,108 @@ const ImageCell: React.FC<{ value: any, onChange: (val: any) => void }> = ({ val
                 </span>
             )}
             
-            <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                accept="image/*" 
-                onChange={handleImageUpload}
-            />
-            
-            {/* Controls */}
-            <div className={`absolute right-1 top-1/2 -translate-y-1/2 flex gap-1 ${value ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity z-10`}>
-                <button 
-                    className="p-1 bg-white shadow-md rounded-full text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-all"
-                    onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-                    title="上传图片"
-                >
-                    <Upload size={12} />
-                </button>
-                {value && (
-                     <button 
-                        className="p-1 bg-white shadow-md rounded-full text-slate-500 hover:text-red-500 hover:bg-red-50 transition-all"
-                        onClick={(e) => { e.stopPropagation(); onChange(''); }}
-                        title="清除"
-                     >
-                        <X size={12} />
-                     </button>
-                )}
-            </div>
+            {!disabled && (
+                <>
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        accept="image/*" 
+                        onChange={handleImageUpload}
+                    />
+                    
+                    {/* Controls */}
+                    <div className={`absolute right-1 top-1/2 -translate-y-1/2 flex gap-1 ${value ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity z-10`}>
+                        <button 
+                            className="p-1 bg-white shadow-md rounded-full text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-all"
+                            onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                            title="上传图片"
+                        >
+                            <Upload size={12} />
+                        </button>
+                        {value && (
+                            <button 
+                                className="p-1 bg-white shadow-md rounded-full text-slate-500 hover:text-red-500 hover:bg-red-50 transition-all"
+                                onClick={(e) => { e.stopPropagation(); onChange(''); }}
+                                title="清除"
+                            >
+                                <X size={12} />
+                            </button>
+                        )}
+                    </div>
+                </>
+            )}
         </div>
     );
 };
 
 // Render Cell Logic (Extracted)
-const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSelected: boolean, onCellChange: (r: string, c: string, v: any) => void, allSheets: Sheet[]) => {
+const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSelected: boolean, onCellChange: (r: string, c: string, v: any) => void, allSheets: Sheet[], disabled: boolean) => {
       const value = row[col.id];
-      const onChange = (val: any) => onCellChange(row.id, col.id, val);
+      const onChange = (val: any) => {
+          if (!disabled) onCellChange(row.id, col.id, val);
+      }
       const bgClass = (isRowSelected || isCellSelected) ? 'bg-transparent' : ''; 
+
+      // READ ONLY RENDERING FOR COMPLEX TYPES TO PRESERVE COLORS
+      if (disabled) {
+          switch(col.type) {
+              case 'select': {
+                  const opt = col.options?.find(o => o.label === value);
+                  return (
+                      <div className="px-3 text-xs h-full flex items-center w-full">
+                           {opt ? <span className={`px-2 py-0.5 rounded-md ${opt.color}`}>{value}</span> : value}
+                      </div>
+                  )
+              }
+              case 'multiSelect': {
+                  const vals = Array.isArray(value) ? value : [];
+                  return (
+                      <div className="px-3 text-xs h-full flex items-center gap-1 overflow-hidden w-full">
+                          {vals.map((v: string) => {
+                              const opt = col.options?.find(o => o.label === v);
+                              return <span key={v} className={`px-1.5 py-0.5 rounded ${opt?.color}`}>{v}</span>
+                          })}
+                      </div>
+                  )
+              }
+              case 'date':
+                   return (
+                       <div className="px-3 text-xs h-full flex items-center text-slate-700 w-full">
+                           {value ? dayjs(value).format('YYYY-MM-DD') : ''}
+                       </div>
+                   )
+              case 'relation':
+                   const targetSheetId = col.relationConfig?.targetSheetId;
+                   const targetSheet = allSheets.find(s => s.id === targetSheetId);
+                   if (!targetSheet) return <span className="px-3 text-xs text-red-300 flex items-center h-full">关联失效</span>;
+                   const displayCol = targetSheet.columns.find(c => c.type === 'text') || targetSheet.columns[0];
+                   const vals = Array.isArray(value) ? value : [];
+                   const labels = vals.map((id: string) => {
+                        const r = targetSheet.rows.find(row => row.id === id);
+                        return r ? r[displayCol.id] : '???';
+                   });
+                   return (
+                       <div className="px-3 text-xs h-full flex items-center gap-1 overflow-hidden w-full">
+                           {labels.map((l: string, i: number) => (
+                               <span key={i} className="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 truncate max-w-[100px]">{l}</span>
+                           ))}
+                       </div>
+                   )
+              case 'checkbox':
+                  return (
+                    <div className="w-full h-full flex items-center justify-center pointer-events-none">
+                        <Checkbox checked={!!value} />
+                    </div>
+                  );
+              case 'switch':
+                   return (
+                       <div className="w-full h-full flex items-center justify-center pointer-events-none">
+                           <Switch size="small" checked={!!value} />
+                       </div>
+                   )
+          }
+      }
 
       switch (col.type) {
           case 'text':
@@ -218,21 +301,24 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
                       onChange={onChange} 
                       isSelected={isRowSelected || isCellSelected}
                       placeholder={col.type === 'url' ? 'https://...' : ''}
+                      disabled={disabled}
                   />
               );
           case 'number':
               return (
                   <InputNumber 
+                      readOnly={disabled}
                       bordered={false}
                       value={value}
                       onChange={val => onChange(val)}
-                      className={`w-full h-full text-xs input-number-no-border rounded-none ${bgClass}`}
+                      className={`w-full h-full text-xs input-number-no-border rounded-none ${bgClass} ${disabled ? 'text-slate-600' : ''}`}
                       controls={false}
                   />
               );
           case 'select':
               return (
                   <Select
+                      disabled={disabled}
                       bordered={false}
                       value={value}
                       onChange={onChange}
@@ -253,6 +339,7 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
               return (
                   <div className="w-full h-full px-1 py-0.5 overflow-hidden">
                     <Select
+                        disabled={disabled}
                         mode="multiple"
                         bordered={false}
                         value={Array.isArray(value) ? value : []}
@@ -285,6 +372,7 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
               return (
                   <div className="w-full h-full px-1 py-0.5 overflow-hidden">
                     <Select
+                        disabled={disabled}
                         mode="multiple"
                         bordered={false}
                         value={Array.isArray(value) ? value : []}
@@ -303,6 +391,7 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
           case 'date':
               return (
                   <DatePicker 
+                      disabled={disabled}
                       bordered={false}
                       value={value ? dayjs(value) : null}
                       onChange={date => onChange(date ? date.format('YYYY-MM-DD') : '')}
@@ -313,19 +402,19 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
           case 'checkbox':
               return (
                   <div className="w-full h-full flex items-center justify-center">
-                      <Checkbox checked={!!value} onChange={e => onChange(e.target.checked)} />
+                      <Checkbox disabled={disabled} checked={!!value} onChange={e => onChange(e.target.checked)} />
                   </div>
               );
           case 'switch':
               return (
                   <div className="w-full h-full flex items-center justify-center">
-                      <Switch size="small" checked={!!value} onChange={checked => onChange(checked)} />
+                      <Switch disabled={disabled} size="small" checked={!!value} onChange={checked => onChange(checked)} />
                   </div>
               );
           case 'rating':
               return (
                   <div className="w-full h-full flex items-center px-3">
-                      <Rate value={Number(value)} onChange={onChange} style={{ fontSize: 12 }} />
+                      <Rate disabled={disabled} value={Number(value)} onChange={onChange} style={{ fontSize: 12 }} />
                   </div>
               );
           case 'person':
@@ -333,6 +422,7 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
                   <div className="w-full h-full flex items-center px-3 gap-2">
                       <Avatar size={20} className="bg-indigo-500 text-[10px]">{value ? String(value)[0].toUpperCase() : <User size={10}/>}</Avatar>
                       <EditableTextCell 
+                          disabled={disabled}
                           value={value} 
                           onChange={onChange} 
                           isSelected={isRowSelected || isCellSelected}
@@ -340,7 +430,7 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
                   </div>
               );
           case 'image':
-              return <ImageCell value={value} onChange={onChange} />;
+              return <ImageCell value={value} onChange={onChange} disabled={disabled} />;
           default:
               const displayVal = (typeof value === 'object' && value !== null) ? JSON.stringify(value) : String(value ?? '');
               return <span className="px-3 text-xs text-slate-400 flex items-center h-full truncate" title={displayVal}>{displayVal}</span>;
@@ -351,7 +441,8 @@ const renderCell = (row: RowData, col: Column, isRowSelected: boolean, isCellSel
 const Row = ({ index, style, data }: ListChildComponentProps<ItemData>) => {
     const { 
         flatData, visibleColumns, columns, groupBy, totalWidth, 
-        onCellChange, onSelectRow, onAddRow, toggleGroup, onOpenRowDetail, getColWidth, allSheets, selectedRowIds, selectedCellIds, onCellMouseDown, onCellMouseEnter, onCellContextMenu
+        onCellChange, onSelectRow, onAddRow, toggleGroup, onOpenRowDetail, getColWidth, allSheets, selectedRowIds, selectedCellIds, onCellMouseDown, onCellMouseEnter, onCellContextMenu,
+        canEditData, readonlyColumnIds
     } = data;
     const item = flatData[index];
     
@@ -380,7 +471,7 @@ const Row = ({ index, style, data }: ListChildComponentProps<ItemData>) => {
     if (item.type === 'add-row') {
           return (
               <div style={{ ...style, width: totalWidth < (style.width as number) ? style.width : totalWidth }} className="border-b border-slate-100 flex items-center bg-white">
-                  <div className="w-10 border-r border-slate-100 h-full bg-slate-50/30"></div>
+                  <div className="w-10 border-r border-slate-100 h-full bg-slate-50/30 flex-shrink-0"></div>
                   <button 
                       onClick={onAddRow}
                       className="flex-1 h-full flex items-center gap-2 px-3 text-sm text-slate-400 hover:text-indigo-600 hover:bg-slate-50 transition-colors text-left group"
@@ -426,6 +517,10 @@ const Row = ({ index, style, data }: ListChildComponentProps<ItemData>) => {
             {visibleColumns.map((col, colIndex) => {
                 const cellKey = `${row.id}:${col.id}`;
                 const isCellSelected = selectedCellIds.has(cellKey);
+                const isColumnReadonly = readonlyColumnIds.has(col.id);
+                // The cell is disabled if: User can't edit data globally OR this specific column is readonly
+                const isDisabled = !canEditData || isColumnReadonly;
+
                 return (
                     <div 
                         key={col.id} 
@@ -439,7 +534,7 @@ const Row = ({ index, style, data }: ListChildComponentProps<ItemData>) => {
                         onMouseEnter={() => onCellMouseEnter(row.id, col.id, index, colIndex)}
                         onContextMenu={(e) => onCellContextMenu(row.id, col.id, e)}
                     >
-                        {renderCell(row, col, isRowSelected, isCellSelected, onCellChange, allSheets)}
+                        {renderCell(row, col, isRowSelected, isCellSelected, onCellChange, allSheets, isDisabled)}
                     </div>
                 )
             })}
@@ -451,15 +546,17 @@ const Row = ({ index, style, data }: ListChildComponentProps<ItemData>) => {
 
 const Spreadsheet: React.FC<SpreadsheetProps> = ({
   columns, rows, selectedRowIds, sortRule, rowHeight, hiddenColumnIds, groupBy, allSheets,
+  canEditData, canEditSchema,
+  readonlyColumnIds = new Set(), // Default to empty set
   onCellChange, onCellsChange, onSelectRow, onSelectAll, onSortColumn, onDeleteColumn, onEditColumn, onDuplicateColumn, onAddRow, onAddColumn,
-  onColumnReorder, onOpenRowDetail, onPaste,
+  onColumnReorder, onOpenRowDetail, onPaste, onColumnResize,
   onDeleteSelected
 }) => {
   
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const listRef = useRef<any>(null);
   const headerRef = useRef<HTMLDivElement>(null);
-  const outerListRef = useRef<HTMLElement>(null);
+  const [scrollerElement, setScrollerElement] = useState<HTMLElement | null>(null);
   
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number } | null>(null);
@@ -471,6 +568,9 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   // --- Drag Selection State ---
   const [isSelecting, setIsSelecting] = useState(false);
   const [dragStart, setDragStart] = useState<{rowIndex: number, colIndex: number} | null>(null);
+
+  // --- Column Resize State ---
+  const [resizing, setResizing] = useState<{ colId: string, startX: number, startWidth: number } | null>(null);
 
   const visibleColumns = useMemo(() => columns.filter(c => !hiddenColumnIds.has(c.id)), [columns, hiddenColumnIds]);
   const getColWidth = useCallback((col: Column) => col.width || 150, []);
@@ -527,7 +627,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   const flatData: VirtualItem[] = useMemo(() => {
       if (!groupBy) {
           const items: VirtualItem[] = rows.map((r, i) => ({ type: 'row', data: r, index: i }));
-          items.push({ type: 'add-row' });
+          if (canEditData) items.push({ type: 'add-row' }); // Only show if permission
           return items;
       }
       
@@ -557,12 +657,13 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
               groupRows.forEach((row, i) => items.push({ type: 'row', data: row, index: i }));
           }
       });
-      items.push({ type: 'add-row' });
+      if (canEditData) items.push({ type: 'add-row' });
 
       return items;
-  }, [rows, groupBy, collapsedGroups, columns]);
+  }, [rows, groupBy, collapsedGroups, columns, canEditData]);
   
-  const totalWidth = useMemo(() => visibleColumns.reduce((acc, col) => acc + getColWidth(col), 0) + 50, [visibleColumns, getColWidth]);
+  // Calculated total width: Sum of cols + checkbox(40) + add button(40) + buffer(60) = total
+  const totalWidth = useMemo(() => visibleColumns.reduce((acc, col) => acc + getColWidth(col), 0) + 140, [visibleColumns, getColWidth]);
 
   const getItemSize = () => {
       // Group header height matches row height for FixedSizeList compatibility
@@ -616,6 +717,41 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
       }
   };
 
+  // --- Column Resize Logic ---
+  useEffect(() => {
+    if (!resizing) return;
+    
+    const onMouseMove = (e: MouseEvent) => {
+        const diff = e.clientX - resizing.startX;
+        const newWidth = Math.max(50, resizing.startWidth + diff);
+        onColumnResize && onColumnResize(resizing.colId, newWidth);
+    };
+
+    const onMouseUp = () => {
+        setResizing(null);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    };
+  }, [resizing, onColumnResize]);
+
+  const handleResizeStart = (e: React.MouseEvent, colId: string, width: number) => {
+      e.stopPropagation(); 
+      e.preventDefault(); 
+      setResizing({ colId, startX: e.clientX, startWidth: width });
+  };
+
   const onMouseUp = () => {
       setIsSelecting(false);
       setDragStart(null);
@@ -632,6 +768,16 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
       }
   }, []);
   
+  // --- Scroll Sync Logic ---
+  useEffect(() => {
+      if(!scrollerElement) return;
+      const handleScroll = () => {
+           if (headerRef.current) headerRef.current.scrollLeft = scrollerElement.scrollLeft;
+      };
+      scrollerElement.addEventListener('scroll', handleScroll);
+      return () => scrollerElement.removeEventListener('scroll', handleScroll);
+  }, [scrollerElement]);
+
   // --- Context Menu Handlers ---
   const handleContextMenu = (rowId: string, colId: string, e: React.MouseEvent) => {
       e.preventDefault();
@@ -650,11 +796,14 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   };
 
   const handleDeleteValues = () => {
+      if (!canEditData) return;
       if (!onCellsChange || selectedCellIds.size === 0) return;
+      // Filter out readonly columns from delete action
       const updates = Array.from(selectedCellIds).map((id: string) => {
           const [r, c] = id.split(':');
           return { rowId: r, colId: c, value: '' };
-      });
+      }).filter(u => !readonlyColumnIds.has(u.colId));
+      
       onCellsChange(updates);
       setContextMenu(null);
   };
@@ -662,6 +811,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
   // --- Keyboard & Paste Logic ---
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
+        if (!canEditData) return;
         if (selectedCellIds.size === 0) return;
         const target = e.target as HTMLElement;
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
@@ -708,55 +858,70 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         document.removeEventListener('paste', handlePaste);
         window.removeEventListener('keydown', onKeyDown);
     };
-  }, [selectedCellIds, lastSelected, onPaste, rows, visibleColumns]);
+  }, [selectedCellIds, lastSelected, onPaste, rows, visibleColumns, canEditData, readonlyColumnIds]);
 
   return (
-    <div className="flex-1 h-full flex flex-col bg-white overflow-hidden relative selection-area" ref={outerListRef as any}>
-        {/* Header */}
-        <div className="flex border-b border-slate-200 bg-slate-50 z-10 sticky top-0" ref={headerRef}>
-            <div className="w-10 flex-shrink-0 flex items-center justify-center border-r border-slate-200 bg-slate-50 text-slate-400">
-                <Checkbox 
-                    checked={rows.length > 0 && selectedRowIds.size === rows.length} 
-                    indeterminate={selectedRowIds.size > 0 && selectedRowIds.size < rows.length}
-                    onChange={onSelectAll}
-                />
-            </div>
-            {visibleColumns.map((col, idx) => (
-                <div 
-                    key={col.id} 
-                    style={{ width: getColWidth(col) }} 
-                    className="flex-shrink-0 h-9 px-2 flex items-center justify-between border-r border-slate-200 text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 group transition-colors relative"
-                >
-                    <div className="flex items-center gap-1.5 truncate flex-1 cursor-pointer" onClick={() => onSortColumn(col.id, sortRule?.columnId === col.id && sortRule?.direction === 'asc' ? 'desc' : 'asc')}>
-                        {getColumnIcon(col.type)}
-                        <span className="truncate">{col.label}</span>
-                    </div>
-                    
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
-                        <Tooltip title="列设置">
-                            <div className="p-1 hover:bg-slate-200 rounded cursor-pointer" onClick={(e) => { e.stopPropagation(); onEditColumn(col); }}>
-                                <ChevronDown size={12} />
-                            </div>
-                        </Tooltip>
-                    </div>
+    <div className="flex-1 h-full flex flex-col bg-white overflow-hidden relative selection-area">
+        {/* Header - now with overflow-hidden and ref for scroll sync */}
+        <div className="border-b border-slate-200 bg-slate-50 z-10 sticky top-0 overflow-hidden" ref={headerRef}>
+            <div className="flex" style={{ width: totalWidth, minWidth: '100%' }}>
+                <div className="w-10 flex-shrink-0 flex items-center justify-center border-r border-slate-200 bg-slate-50 text-slate-400">
+                    <Checkbox 
+                        checked={rows.length > 0 && selectedRowIds.size === rows.length} 
+                        indeterminate={selectedRowIds.size > 0 && selectedRowIds.size < rows.length}
+                        onChange={onSelectAll}
+                    />
                 </div>
-            ))}
-            <div 
-                className="w-10 flex items-center justify-center cursor-pointer hover:bg-slate-100 transition-colors border-r border-slate-200 text-slate-400"
-                onClick={onAddColumn}
-                title="添加列"
-            >
-                <Plus size={16} />
+                {visibleColumns.map((col, idx) => (
+                    <div 
+                        key={col.id} 
+                        style={{ width: getColWidth(col) }} 
+                        className="flex-shrink-0 h-9 px-2 flex items-center justify-between border-r border-slate-200 text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 group transition-colors relative"
+                    >
+                        <div className="flex items-center gap-1.5 truncate flex-1 cursor-pointer" onClick={() => onSortColumn(col.id, sortRule?.columnId === col.id && sortRule?.direction === 'asc' ? 'desc' : 'asc')}>
+                            {getColumnIcon(col.type)}
+                            <span className="truncate">{col.label}</span>
+                        </div>
+                        
+                        {canEditSchema && (
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                                <Tooltip title="列设置">
+                                    <div className="p-1 hover:bg-slate-200 rounded cursor-pointer" onClick={(e) => { e.stopPropagation(); onEditColumn(col); }}>
+                                        <ChevronDown size={12} />
+                                    </div>
+                                </Tooltip>
+                            </div>
+                        )}
+
+                        {/* Resize Handle */}
+                        <div 
+                            className="absolute right-0 top-0 w-1 h-full cursor-col-resize hover:bg-indigo-400 z-10"
+                            onMouseDown={(e) => handleResizeStart(e, col.id, getColWidth(col))}
+                            onClick={(e) => e.stopPropagation()}
+                        />
+                    </div>
+                ))}
+                
+                {canEditSchema && (
+                    <div 
+                        className="w-10 flex-shrink-0 flex items-center justify-center cursor-pointer hover:bg-slate-100 transition-colors border-r border-slate-200 text-slate-400"
+                        onClick={onAddColumn}
+                        title="添加列"
+                    >
+                        <Plus size={16} />
+                    </div>
+                )}
+                <div className="flex-1 bg-slate-50 min-w-[20px]" />
             </div>
-            <div className="flex-1 bg-slate-50" />
         </div>
 
         {/* Virtual List */}
         <div className="flex-1">
             <AutoSizer>
                 {({ height, width }) => (
-                    <List
+                    <FixedSizeList
                         ref={listRef}
+                        outerRef={setScrollerElement} // Pass ref callback to capture the scrolling container
                         height={height}
                         itemCount={flatData.length}
                         itemSize={getItemSize()}
@@ -778,11 +943,14 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                             allSheets,
                             onCellMouseDown,
                             onCellMouseEnter,
-                            onCellContextMenu: handleContextMenu
+                            onCellContextMenu: handleContextMenu,
+                            canEditData,
+                            canEditSchema,
+                            readonlyColumnIds
                         }}
                     >
                         {Row}
-                    </List>
+                    </FixedSizeList>
                 )}
             </AutoSizer>
         </div>
@@ -797,9 +965,11 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 <button onClick={handleCopy} className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 flex items-center gap-2">
                     <Copy size={14} /> 复制
                 </button>
-                <button onClick={handleDeleteValues} className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2">
-                    <Scissors size={14} /> 清除内容
-                </button>
+                {canEditData && (
+                    <button onClick={handleDeleteValues} className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2">
+                        <Scissors size={14} /> 清除内容
+                    </button>
+                )}
                 <div className="h-px bg-slate-100 my-1"></div>
                 <div className="px-3 py-1 text-[10px] text-slate-400">
                     选中 {selectedCellIds.size} 个单元格

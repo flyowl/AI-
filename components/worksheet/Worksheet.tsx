@@ -1,8 +1,10 @@
+
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Sidebar, { AIMode } from '../Sidebar';
 import NavigationSidebar from '../NavigationSidebar';
 import SmartSpreadsheet from '../SmartSpreadsheet';
-import { Column, AIStatus, AnalysisResult, View, ViewType, ChatMessage, Sheet, RowData } from '../../types';
+import { Column, AIStatus, AnalysisResult, View, ViewType, ChatMessage, Sheet, RowData, UserRole, AppPermissions, RoleDef } from '../../types';
 import { generateSmartRows, analyzeDataset, generateSystem, modifySheetSchema } from '../../services/geminiService';
 import { Sparkles, Folder, Table2 } from 'lucide-react';
 import { message, Modal } from 'antd';
@@ -26,6 +28,35 @@ const INITIAL_VIEW: View = {
     }
 };
 
+const SYSTEM_ROLES: RoleDef[] = [
+    {
+        id: 'Admin',
+        name: '管理员',
+        description: '拥有所有操作权限',
+        isSystem: true,
+        capabilities: { canManageSheets: true, canEditSchema: true, canEditData: true }
+    },
+    {
+        id: 'Editor',
+        name: '编辑者',
+        description: '无法修改表结构，可管理数据',
+        isSystem: true,
+        capabilities: { canManageSheets: false, canEditSchema: false, canEditData: true }
+    },
+    {
+        id: 'Viewer',
+        name: '只读用户',
+        description: '仅查看数据',
+        isSystem: true,
+        capabilities: { canManageSheets: false, canEditSchema: false, canEditData: false }
+    }
+];
+
+const INITIAL_PERMISSIONS: AppPermissions = {
+    Editor: { sheetVisibility: {}, columnVisibility: {}, columnReadonly: {} },
+    Viewer: { sheetVisibility: {}, columnVisibility: {}, columnReadonly: {} }
+};
+
 export interface WorksheetProps {
     title?: string;
     initialSheets?: Sheet[];
@@ -37,6 +68,15 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
   const [sheets, setSheets] = useState<Sheet[]>(initialSheets);
   const [activeSheetId, setActiveSheetId] = useState<string>('');
   const [isInitialized, setIsInitialized] = useState(false);
+  
+  // --- User Role & Permissions State ---
+  const [currentUserRole, setCurrentUserRole] = useState<UserRole>('Admin');
+  const [roles, setRoles] = useState<RoleDef[]>(SYSTEM_ROLES);
+  const [permissions, setPermissions] = useState<AppPermissions>(INITIAL_PERMISSIONS);
+
+  // Derive Current Capabilities
+  const currentRoleDef = useMemo(() => roles.find(r => r.id === currentUserRole) || SYSTEM_ROLES[2], [roles, currentUserRole]);
+  const capabilities = currentRoleDef.capabilities;
 
   // --- Persistence Logic ---
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,6 +135,62 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
       setSheets(prev => prev.map(s => s.id === id ? updater(s) : s));
   };
 
+  // --- Filtering Logic based on Permissions ---
+  const getVisibleSheets = (roleId: string, allSheets: Sheet[]) => {
+      if (roleId === 'Admin') return allSheets;
+      const rolePerms = permissions[roleId];
+      if (!rolePerms) return allSheets;
+      
+      return allSheets.filter(s => {
+          if (s.type === 'sheet') {
+              return rolePerms.sheetVisibility[s.id] !== false;
+          }
+          return true; // Folders/Docs visible for now
+      });
+  };
+
+  const getVisibleColumns = (roleId: string, columns: Column[]) => {
+      if (roleId === 'Admin') return columns;
+      const rolePerms = permissions[roleId];
+      if (!rolePerms) return columns;
+      return columns.filter(c => rolePerms.columnVisibility[c.id] !== false);
+  };
+
+  const visibleSheets = useMemo(() => getVisibleSheets(currentUserRole, sheets), [currentUserRole, sheets, permissions]);
+  
+  // Redirect if active sheet becomes hidden
+  useEffect(() => {
+      if (activeSheetId && !visibleSheets.find(s => s.id === activeSheetId)) {
+          const firstVisible = visibleSheets.find(s => s.type === 'sheet');
+          if (firstVisible) setActiveSheetId(firstVisible.id);
+          else setActiveSheetId('');
+      }
+  }, [visibleSheets, activeSheetId]);
+
+  const activeSheetVisibleCols = useMemo(() => {
+      if (!activeSheet) return [];
+      return getVisibleColumns(currentUserRole, activeSheet.columns);
+  }, [activeSheet, currentUserRole, permissions]);
+
+  // Compute Readonly Columns for current sheet & role
+  const activeSheetReadonlyColumnIds = useMemo(() => {
+      const set = new Set<string>();
+      // Admin always edit, Viewer never edit (handled by capabilities)
+      if (currentUserRole === 'Admin' || currentUserRole === 'Viewer') return set; 
+
+      // For custom roles / Editor
+      const rolePerms = permissions[currentUserRole];
+      if (activeSheet && rolePerms) {
+          activeSheet.columns.forEach(col => {
+              if (rolePerms.columnReadonly?.[col.id]) {
+                  set.add(col.id);
+              }
+          });
+      }
+      return set;
+  }, [activeSheet, currentUserRole, permissions]);
+
+
   // Chat / AI State
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [aiStatus, setAiStatus] = useState<AIStatus>(AIStatus.IDLE);
@@ -133,6 +229,10 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
   };
 
   const handleAddSheet = () => {
+      if (!capabilities.canManageSheets) {
+          message.error('无权限新建工作表');
+          return;
+      }
       const newSheet: Sheet = {
           id: crypto.randomUUID(),
           name: `工作表 ${sheets.filter(s => s.type === 'sheet').length + 1}`,
@@ -150,6 +250,7 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
   };
 
   const handleAddFolder = () => {
+    if (!capabilities.canManageSheets) return;
     const newFolder: Sheet = {
         id: crypto.randomUUID(),
         name: `新建文件夹 ${sheets.filter(s => s.type === 'folder').length + 1}`,
@@ -165,6 +266,7 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
   };
 
   const handleDeleteSheet = (id: string) => {
+      if (!capabilities.canManageSheets) return;
       const sheetToDelete = sheets.find(s => s.id === id);
       if (!sheetToDelete) return;
       
@@ -201,11 +303,13 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
   };
 
   const handleRenameSheet = (id: string, newName: string) => {
+      if (!capabilities.canManageSheets) return;
       if (!newName.trim()) return;
       setSheets(prev => prev.map(s => s.id === id ? { ...s, name: newName.trim() } : s));
   };
 
   const handleMoveSheet = (dragId: string, targetId: string, position: 'top' | 'bottom' | 'inside') => {
+      if (!capabilities.canManageSheets) return;
       if (dragId === targetId) return;
       setSheets(prev => {
           const dragItemIndex = prev.findIndex(s => s.id === dragId);
@@ -243,6 +347,7 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
   };
 
   const handleImportSheets = (importedData: any) => {
+      if (!capabilities.canManageSheets) return;
       try {
           if (!Array.isArray(importedData)) throw new Error("格式错误");
           const restoredSheets: Sheet[] = importedData.map((s: any) => ({
@@ -268,10 +373,11 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
    */
   const handleAiAction = async (prompt: string, mode: AIMode, targetSheetId?: string) => {
       setAiStatus(AIStatus.LOADING);
-      addMessage('user', prompt);
+      if (prompt.trim()) addMessage('user', prompt);
 
       try {
         if (mode === 'create_project') {
+            if (!capabilities.canManageSheets) throw new Error("无创建权限");
             // 1. Generate System Structure (JSON)
             const systemData = await generateSystem(prompt);
             
@@ -352,6 +458,7 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
             addMessage('ai', `✅ 已为您生成 "${prompt}" 系统，包含 ${newSheets.length} 个数据表。`);
 
         } else if (mode === 'modify_table') {
+            if (!capabilities.canEditSchema) throw new Error("无修改结构权限");
             const targetSheet = sheets.find(s => s.id === targetSheetId) || activeSheet;
             if (!targetSheet || targetSheet.type !== 'sheet') {
                 addMessage('ai', '请先选择一个有效的工作表。');
@@ -393,6 +500,7 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
             }
 
         } else if (mode === 'fill_data') {
+            if (!capabilities.canEditData) throw new Error("无填充数据权限");
             const targetSheet = sheets.find(s => s.id === targetSheetId) || activeSheet;
              if (!targetSheet || targetSheet.type !== 'sheet') {
                 addMessage('ai', '请先选择一个有效的工作表。');
@@ -426,13 +534,37 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
             const result = await analyzeDataset(targetSheet.columns, targetSheet.rows);
             setAnalysis(result);
             addMessage('ai', `📊 “${targetSheet.name}” 分析完成！\n\n**摘要**: ${result.summary}\n\n**关键趋势**:\n${result.keyTrends.map(t => `- ${t}`).join('\n')}\n\n建议图表: ${result.suggestedChartType === 'bar' ? '柱状图' : result.suggestedChartType === 'line' ? '折线图' : '饼图'}。`);
+        } else if (mode === 'analyze_row_data') {
+            const targetSheet = sheets.find(s => s.id === targetSheetId) || activeSheet;
+            if (!targetSheet || targetSheet.type !== 'sheet') {
+                addMessage('ai', '请先选择一个有效的工作表。');
+                setAiStatus(AIStatus.ERROR);
+                return;
+            }
+
+            if (targetSheet.selectedRowIds.size === 0) {
+                addMessage('ai', '⚠️ 请先在表格中选中至少一行数据，以便进行分析。');
+                setAiStatus(AIStatus.ERROR);
+                return;
+            }
+
+            const selectedRows = targetSheet.rows.filter(r => targetSheet.selectedRowIds.has(r.id));
+            const rowsToAnalyze = selectedRows.slice(0, 100); // Max 100 limit
+
+            if (selectedRows.length > 100) {
+                addMessage('ai', `ℹ️ 已选中 ${selectedRows.length} 行，将仅分析前 100 行。`);
+            }
+
+            const result = await analyzeDataset(targetSheet.columns, rowsToAnalyze);
+            setAnalysis(result);
+            addMessage('ai', `📊 已针对选中的 ${rowsToAnalyze.length} 行数据完成分析！\n\n**摘要**: ${result.summary}\n\n**关键趋势**:\n${result.keyTrends.map(t => `- ${t}`).join('\n')}\n\n建议图表: ${result.suggestedChartType === 'bar' ? '柱状图' : result.suggestedChartType === 'line' ? '折线图' : '饼图'}。`);
         }
 
         setAiStatus(AIStatus.SUCCESS);
-      } catch (error) {
+      } catch (error: any) {
         console.error(error);
         setAiStatus(AIStatus.ERROR);
-        addMessage('ai', '执行过程中遇到了错误，请稍后再试。');
+        addMessage('ai', `错误: ${error.message || '执行过程中遇到了错误，请稍后再试。'}`);
       }
   };
 
@@ -441,7 +573,8 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
         
         {/* Navigation Sidebar */}
         <NavigationSidebar 
-            sheets={sheets} activeSheetId={activeSheetId} onSwitchSheet={setActiveSheetId}
+            sheets={visibleSheets} activeSheetId={activeSheetId} onSwitchSheet={setActiveSheetId}
+            canManageSheets={capabilities.canManageSheets}
             onAddSheet={handleAddSheet} onAddFolder={handleAddFolder} onRenameSheet={handleRenameSheet}
             onDeleteSheet={handleDeleteSheet} onToggleFolder={handleToggleFolder} onMoveSheet={handleMoveSheet}
             onImportSheets={handleImportSheets}
@@ -480,9 +613,11 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
                 <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 p-4">
                     <SmartSpreadsheet 
                         sheetId={activeSheet.id} sheetName={activeSheet.name}
-                        columns={activeSheet.columns} rows={activeSheet.rows}
+                        columns={activeSheetVisibleCols} rows={activeSheet.rows}
                         views={activeSheet.views} activeViewId={activeSheet.activeViewId} selectedRowIds={activeSheet.selectedRowIds}
-                        analysisResult={analysis} allSheets={sheets}
+                        analysisResult={analysis} allSheets={visibleSheets}
+                        readonlyColumnIds={activeSheetReadonlyColumnIds}
+                        capabilities={capabilities}
                         onRowsChange={(newRows) => updateActiveSheet(s => ({ ...s, rows: newRows }))}
                         onColumnsChange={(newCols) => updateActiveSheet(s => ({ ...s, columns: newCols }))}
                         onViewsChange={(newViews) => updateActiveSheet(s => ({ ...s, views: newViews }))}
@@ -513,6 +648,12 @@ const Worksheet: React.FC<WorksheetProps> = ({ title = '多维表格', initialSh
                     onSwitchView={handleSwitchView} 
                     onCreateView={handleCreateView} 
                     onDeleteView={handleDeleteView} 
+                    currentUserRole={currentUserRole}
+                    onRoleChange={setCurrentUserRole}
+                    roles={roles}
+                    onRolesChange={setRoles}
+                    permissions={permissions}
+                    onUpdatePermissions={setPermissions}
                 />
             </div>
           </main>

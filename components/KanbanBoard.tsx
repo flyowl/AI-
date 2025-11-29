@@ -1,4 +1,5 @@
 
+
 import React, { useMemo } from 'react';
 import { Column, RowData } from '../types';
 import { MoreHorizontal, Plus, Calendar, AlertCircle } from 'lucide-react';
@@ -11,9 +12,10 @@ interface KanbanBoardProps {
   groupByColId: string | null;
   onCardClick: (rowId: string) => void;
   onAddClick: (initialValues?: any) => void;
+  canEditData: boolean;
 }
 
-const KanbanBoard: React.FC<KanbanBoardProps> = ({ columns, rows, groupByColId, onCardClick, onAddClick }) => {
+const KanbanBoard: React.FC<KanbanBoardProps> = ({ columns, rows, groupByColId, onCardClick, onAddClick, canEditData }) => {
   // Find the grouping column (must be select type for best results, or we default)
   const groupCol = columns.find(c => c.id === groupByColId) || columns.find(c => c.type === 'select');
 
@@ -82,12 +84,14 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ columns, rows, groupByColId, 
                                 onClick={() => onCardClick(row.id)}
                             />
                         ))}
-                        <button 
-                            onClick={() => onAddClick({ [groupCol.id]: groupName === '未分组' ? '' : groupName })}
-                            className="w-full py-2 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-white hover:shadow-sm rounded-lg text-sm transition-all border border-transparent hover:border-indigo-100"
-                        >
-                            <Plus size={14} className="mr-1"/> 添加
-                        </button>
+                        {canEditData && (
+                            <button 
+                                onClick={() => onAddClick({ [groupCol.id]: groupName === '未分组' ? '' : groupName })}
+                                className="w-full py-2 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-white hover:shadow-sm rounded-lg text-sm transition-all border border-transparent hover:border-indigo-100"
+                            >
+                                <Plus size={14} className="mr-1"/> 添加
+                            </button>
+                        )}
                     </div>
                 </div>
             )

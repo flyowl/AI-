@@ -2,6 +2,31 @@
 
 export type ColumnType = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'checkbox' | 'switch' | 'url' | 'rating' | 'image' | 'file' | 'person' | 'phone' | 'email' | 'location' | 'relation';
 
+// UserRole is now a string ID, but we keep constants for system roles
+export type UserRole = string; 
+
+export interface RoleCapabilities {
+    canManageSheets: boolean; // Create/Delete/Rename sheets/folders
+    canEditSchema: boolean;   // Add/Edit columns
+    canEditData: boolean;     // Add/Edit rows
+}
+
+export interface RoleDef {
+    id: string;
+    name: string;
+    description: string;
+    isSystem: boolean; // If true, cannot be deleted/renamed
+    capabilities: RoleCapabilities;
+}
+
+export interface RolePermissionConfig {
+    sheetVisibility: Record<string, boolean>; // sheetId -> visible?
+    columnVisibility: Record<string, boolean>; // colId -> visible?
+    columnReadonly: Record<string, boolean>; // colId -> readonly?
+}
+
+export type AppPermissions = Record<string, RolePermissionConfig>;
+
 export interface SelectOption {
   id: string;
   label: string;
@@ -85,7 +110,7 @@ export interface SortRule {
 
 // --- New Types for Views & Chat ---
 
-export type ViewType = 'grid' | 'kanban' | 'gallery';
+export type ViewType = 'grid' | 'kanban' | 'gallery' | 'gantt';
 
 export interface View {
     id: string;

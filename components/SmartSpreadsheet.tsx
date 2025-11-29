@@ -1,16 +1,17 @@
 
 
 import React, { useState, useMemo } from 'react';
-import { Column, RowData, View, AnalysisResult, ColumnType, SelectOption, Sheet, RelationConfig } from '../types';
+import { Column, RowData, View, AnalysisResult, ColumnType, SelectOption, Sheet, RelationConfig, RoleCapabilities } from '../types';
 import Spreadsheet from './Spreadsheet';
 import KanbanBoard from './KanbanBoard';
 import GalleryGrid from './GalleryGrid';
+import GanttChart from './GanttChart';
 import DataViz from './DataViz';
 import ViewToolbar from './ViewToolbar';
 import AddColumnModal from './AddColumnModal';
 import RowDetailModal from './RowDetailModal';
 import { Modal, message, Button, Select } from 'antd';
-import { Trash2, Copy, X, Kanban } from 'lucide-react';
+import { Trash2, Copy, X, Kanban, CalendarRange } from 'lucide-react';
 import dayjs from 'dayjs';
 
 interface SmartSpreadsheetProps {
@@ -24,6 +25,9 @@ interface SmartSpreadsheetProps {
   analysisResult?: AnalysisResult | null;
   allSheets: Sheet[]; // Needed for context
   
+  readonlyColumnIds?: Set<string>; // New prop for column-level permissions
+  capabilities: RoleCapabilities; // Updated: pass capability flags instead of role string
+
   // State Callbacks (Controlled Component Pattern)
   onRowsChange: (newRows: RowData[]) => void;
   onColumnsChange: (newCols: Column[]) => void;
@@ -45,6 +49,8 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   selectedRowIds,
   analysisResult,
   allSheets,
+  readonlyColumnIds = new Set(),
+  capabilities,
   onRowsChange,
   onColumnsChange,
   onViewsChange,
@@ -171,6 +177,12 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleAddRowAndOpenDetail = (initialValues: Partial<RowData> = {}) => {
+      // Permission Check
+      if (!capabilities.canEditData) {
+          message.error('没有新建行的权限');
+          return;
+      }
+
       const newId = crypto.randomUUID();
       const newRow: RowData = { id: newId, ...initialValues };
       
@@ -192,6 +204,13 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
 
   // Data Operations
   const handleCellChange = (rowId: string, colId: string, value: any) => {
+      // Permission Check
+      if (!capabilities.canEditData) return;
+      if (readonlyColumnIds.has(colId)) {
+          message.warning('该字段为只读，无法修改');
+          return;
+      }
+
       // 1. Update current sheet
       const newRows = rows.map(row => row.id === rowId ? { ...row, [colId]: value } : row);
       onRowsChange(newRows);
@@ -241,8 +260,13 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleBatchCellChange = (updates: {rowId: string, colId: string, value: any}[]) => {
+      if (!capabilities.canEditData) return;
+
+      const validUpdates = updates.filter(u => !readonlyColumnIds.has(u.colId));
+      if (validUpdates.length === 0) return;
+
       const updatesMap = new Map<string, Record<string, any>>();
-      updates.forEach(u => {
+      validUpdates.forEach(u => {
          if(!updatesMap.has(u.rowId)) updatesMap.set(u.rowId, {});
          updatesMap.get(u.rowId)![u.colId] = u.value;
       });
@@ -258,14 +282,27 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleRowUpdate = (rowId: string, updates: Record<string, any>) => {
-      const newRows = rows.map(row => row.id === rowId ? { ...row, ...updates } : row);
+      if (!capabilities.canEditData) {
+          message.error('无法编辑数据');
+          return;
+      }
+      
+      // Filter out readonly updates
+      const safeUpdates = { ...updates };
+      Object.keys(safeUpdates).forEach(key => {
+          if (readonlyColumnIds.has(key)) {
+              delete safeUpdates[key];
+          }
+      });
+      
+      const newRows = rows.map(row => row.id === rowId ? { ...row, ...safeUpdates } : row);
       onRowsChange(newRows);
 
       // Simple Iteration to check for relation updates
-      Object.keys(updates).forEach(key => {
+      Object.keys(safeUpdates).forEach(key => {
           const col = columns.find(c => c.id === key);
           if (col?.type === 'relation') {
-              handleCellChange(rowId, key, updates[key]);
+              handleCellChange(rowId, key, safeUpdates[key]);
           }
       });
 
@@ -273,6 +310,10 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleAddRow = () => {
+      if (!capabilities.canEditData) {
+          message.error('没有新建行的权限');
+          return;
+      }
       const newId = crypto.randomUUID();
       const newRow: RowData = { id: newId };
       columns.forEach(c => {
@@ -288,6 +329,10 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleDeleteRow = (rowId: string) => {
+      if (!capabilities.canEditData) {
+          message.error('无法删除行');
+          return;
+      }
       const newRows = rows.filter(r => r.id !== rowId);
       onRowsChange(newRows);
       
@@ -299,10 +344,12 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleDeleteSelectedTrigger = () => {
+    if (!capabilities.canEditData) return;
     setIsDeleteModalOpen(true);
   };
 
   const confirmDeleteSelected = () => {
+    if (!capabilities.canEditData) return;
     const newRows = rows.filter(r => !selectedRowIds.has(r.id));
     onRowsChange(newRows);
     onSelectionChange(new Set());
@@ -311,6 +358,10 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
   
   const handleDuplicateSelected = () => {
+      if (!capabilities.canEditData) {
+           message.error('无法复制数据');
+           return;
+      }
       const rowsToDuplicate = rows.filter(r => selectedRowIds.has(r.id));
       const newRows = rowsToDuplicate.map(r => ({ ...r, id: crypto.randomUUID() }));
       
@@ -346,6 +397,8 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       targetColId: string | null,
       pasteRange?: { rowIds: string[], colIds: string[] }
   ) => {
+      if (!capabilities.canEditData) return;
+
       if (data.length === 0) return;
 
       // Logic: If range selected and data is single cell, fill range.
@@ -385,7 +438,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       const currentCols = visibleCols.length;
       let newCols = [...columns];
       
-      if (neededCols > currentCols) {
+      if (neededCols > currentCols && capabilities.canEditSchema) { // Only if canEditSchema
           const colsToAdd = neededCols - currentCols;
           for (let i = 0; i < colsToAdd; i++) {
               const newColId = crypto.randomUUID();
@@ -431,7 +484,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                  pasteRowData.forEach((cellVal, cIdx) => {
                      const destColIndex = startColIndex + cIdx;
                      const destCol = allVisibleCols[destColIndex];
-                     if (destCol) {
+                     if (destCol && !readonlyColumnIds.has(destCol.id)) { // Check ReadOnly
                          updates[destCol.id] = cellVal;
                      }
                  });
@@ -447,6 +500,12 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
 
   // Column Operations
   const handleSaveColumn = (name: string, type: ColumnType, options?: SelectOption[], relationConfig?: RelationConfig, defaultValue?: any) => {
+    // Only Admin can add/edit columns, but UI should prevent opening modal for others.
+    if (!capabilities.canEditSchema) {
+         message.error('您没有权限修改列结构');
+         return;
+    }
+
     if (editingColumn) {
         // Edit Mode
         const newCols = columns.map(col => col.id === editingColumn.id ? { 
@@ -503,6 +562,10 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleDeleteColumn = (colId: string) => {
+      if (!capabilities.canEditSchema) {
+          message.error('无权限删除列');
+          return;
+      }
       onColumnsChange(columns.filter(c => c.id !== colId));
       // Also cleanup views to remove references to this column
       const newViews = views.map(v => ({
@@ -520,6 +583,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
   };
 
   const handleDuplicateColumn = (colId: string) => {
+      if (!capabilities.canEditSchema) return;
       const col = columns.find(c => c.id === colId);
       if (!col) return;
       const newId = crypto.randomUUID();
@@ -541,6 +605,12 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
       const [movedCol] = newCols.splice(fromIndex, 1);
       const targetIndex = toIndex > fromIndex ? toIndex - 1 : toIndex;
       newCols.splice(targetIndex, 0, movedCol);
+      onColumnsChange(newCols);
+  };
+
+  // Resize Handler
+  const handleColumnResize = (colId: string, newWidth: number) => {
+      const newCols = columns.map(c => c.id === colId ? { ...c, width: newWidth } : c);
       onColumnsChange(newCols);
   };
 
@@ -569,7 +639,10 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     groupBy={activeView.config.groupBy}
                     rowHeight={activeView.config.rowHeight}
                     hiddenColumnIds={new Set(activeView.config.hiddenColumnIds)}
+                    readonlyColumnIds={readonlyColumnIds}
                     allSheets={allSheets}
+                    canEditData={capabilities.canEditData}
+                    canEditSchema={capabilities.canEditSchema}
                     onCellChange={handleCellChange}
                     onCellsChange={handleBatchCellChange} // Pass batch handler
                     onDeleteRow={handleDeleteRow}
@@ -591,6 +664,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     onHiddenColumnIdsChange={(ids) => handleUpdateViewConfig({ hiddenColumnIds: Array.from(ids) })}
                     onOpenRowDetail={setDetailRowId}
                     onPaste={handleSmartPaste}
+                    onColumnResize={handleColumnResize}
                 />
             )}
 
@@ -620,6 +694,7 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                                 groupByColId={activeView.config.groupBy || columns.find(c => c.type === 'select')?.id || null}
                                 onCardClick={(id) => setDetailRowId(id)}
                                 onAddClick={handleAddRowAndOpenDetail}
+                                canEditData={capabilities.canEditData}
                             />
                         </div>
                 </div>
@@ -632,7 +707,27 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                         rows={processedRows} 
                         onCardClick={(id) => setDetailRowId(id)}
                         onAddClick={() => handleAddRowAndOpenDetail()}
+                        canEditData={capabilities.canEditData}
                     />
+                </div>
+            )}
+
+            {activeView.type === 'gantt' && (
+                <div className="flex-1 overflow-hidden">
+                    <div className="h-full bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                         <div className="p-3 border-b border-slate-100 flex items-center gap-2 bg-white px-6">
+                             <CalendarRange size={16} className="text-indigo-500" />
+                             <span className="text-sm font-semibold text-slate-700">甘特图</span>
+                             <span className="text-xs text-slate-400 ml-2">自动识别日期列</span>
+                         </div>
+                         <div className="flex-1 overflow-hidden p-4 bg-slate-50/50">
+                             <GanttChart 
+                                 columns={columns} 
+                                 rows={processedRows} 
+                                 onCardClick={(id) => setDetailRowId(id)}
+                             />
+                         </div>
+                    </div>
                 </div>
             )}
             
@@ -658,28 +753,31 @@ const SmartSpreadsheet: React.FC<SmartSpreadsheetProps> = ({
                     
                     <div className="h-4 w-px bg-slate-200 shrink-0"></div>
                     
-                    <Button 
-                        type="text" 
-                        icon={<Copy size={14}/>} 
-                        size="small" 
-                        onClick={(e) => { e.stopPropagation(); handleDuplicateSelected(); }}
-                        className="text-slate-600 hover:text-indigo-600 shrink-0"
-                    >
-                        复制
-                    </Button>
-                    
-                    <Button 
-                        type="text" 
-                        danger 
-                        icon={<Trash2 size={14}/>} 
-                        size="small" 
-                        onClick={(e) => { e.stopPropagation(); handleDeleteSelectedTrigger(); }}
-                        className="shrink-0"
-                    >
-                        删除
-                    </Button>
-                    
-                    <div className="h-4 w-px bg-slate-200 shrink-0"></div>
+                    {capabilities.canEditData && (
+                        <>
+                            <Button 
+                                type="text" 
+                                icon={<Copy size={14}/>} 
+                                size="small" 
+                                onClick={(e) => { e.stopPropagation(); handleDuplicateSelected(); }}
+                                className="text-slate-600 hover:text-indigo-600 shrink-0"
+                            >
+                                复制
+                            </Button>
+                            
+                            <Button 
+                                type="text" 
+                                danger 
+                                icon={<Trash2 size={14}/>} 
+                                size="small" 
+                                onClick={(e) => { e.stopPropagation(); handleDeleteSelectedTrigger(); }}
+                                className="shrink-0"
+                            >
+                                删除
+                            </Button>
+                            <div className="h-4 w-px bg-slate-200 shrink-0"></div>
+                        </>
+                    )}
 
                     <Button 
                         type="text" 

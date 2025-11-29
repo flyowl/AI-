@@ -191,8 +191,8 @@ export const generateSmartRows = async (
 export const analyzeDataset = async (columns: Column[], rows: RowData[]): Promise<AnalysisResult> => {
   const ai = getClient();
   
-  // Cap data to avoid token limits
-  const dataSample = JSON.stringify(rows.slice(0, 50)); 
+  // Cap data to avoid token limits. Increased to 100 based on user requirements.
+  const dataSample = JSON.stringify(rows.slice(0, 100)); 
   const schema = columns.map(c => `${c.label} (${c.type})`).join(', ');
 
   const prompt = `
@@ -200,7 +200,7 @@ export const analyzeDataset = async (columns: Column[], rows: RowData[]): Promis
     Task: Analyze the following dataset and provide insights.
     
     Schema: ${schema}
-    Data (First 50 rows): ${dataSample}
+    Data (Up to 100 rows): ${dataSample}
     
     Output JSON Format:
     {

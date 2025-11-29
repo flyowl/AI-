@@ -1,9 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { AIStatus, ChatMessage, View, ViewType, Sheet } from '../types';
-import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, Database, Wand2, BarChart3, Settings2, Info } from 'lucide-react';
-import { Tabs, Input, Button, Modal, Select } from 'antd';
 
-export type AIMode = 'create_project' | 'modify_table' | 'fill_data' | 'analyze_data';
+
+import React, { useState, useRef, useEffect } from 'react';
+import { AIStatus, ChatMessage, View, ViewType, Sheet, UserRole, AppPermissions, RoleDef, RoleCapabilities } from '../types';
+import { Sparkles, Send, Bot, User, Layout, Plus, Trash2, LayoutGrid, Kanban, Image as ImageIcon, Database, Wand2, BarChart3, Settings2, Info, CalendarRange, ListChecks, Settings, ShieldAlert, Edit, UserCog } from 'lucide-react';
+import { Tabs, Input, Button, Modal, Select, Radio, Checkbox, Form, message, Tooltip } from 'antd';
+import PermissionModal from './PermissionModal';
+
+export type AIMode = 'create_project' | 'modify_table' | 'fill_data' | 'analyze_data' | 'analyze_row_data';
 
 interface SidebarProps {
   // Chat Props
@@ -21,18 +24,34 @@ interface SidebarProps {
   onSwitchView: (viewId: string) => void;
   onCreateView: (name: string, type: ViewType) => void;
   onDeleteView: (viewId: string) => void;
+
+  // Role & Permissions
+  currentUserRole: UserRole;
+  onRoleChange: (role: UserRole) => void;
+  roles: RoleDef[];
+  onRolesChange: (roles: RoleDef[]) => void;
+  permissions: AppPermissions;
+  onUpdatePermissions: (perms: AppPermissions) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ 
     messages, status, onSendMessage,
     sheets, activeSheetId,
-    views, activeViewId, onSwitchView, onCreateView, onDeleteView
+    views, activeViewId, onSwitchView, onCreateView, onDeleteView,
+    currentUserRole, onRoleChange,
+    roles, onRolesChange,
+    permissions, onUpdatePermissions
 }) => {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [isPermModalOpen, setIsPermModalOpen] = useState(false);
   const [newViewName, setNewViewName] = useState('');
   const [newViewType, setNewViewType] = useState<ViewType>('grid');
+  
+  // Role Management State
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
+  const [roleForm] = Form.useForm();
   
   // AI Control State
   const [aiMode, setAiMode] = useState<AIMode>('create_project');
@@ -51,9 +70,49 @@ const Sidebar: React.FC<SidebarProps> = ({
   }, [messages, status]);
 
   const handleSend = () => {
-    if (!input.trim() && aiMode !== 'analyze_data') return; // Analyze might not need text
+    if (!input.trim() && aiMode !== 'analyze_data' && aiMode !== 'analyze_row_data') return; 
     onSendMessage(input, aiMode, targetSheetId);
     setInput('');
+  };
+
+  const handleSaveRole = () => {
+    roleForm.validateFields().then((values) => {
+        const newRole: RoleDef = {
+            id: crypto.randomUUID(),
+            name: values.name,
+            description: values.description || '自定义角色',
+            isSystem: false,
+            capabilities: {
+                canManageSheets: values.canManageSheets,
+                canEditSchema: values.canEditSchema,
+                canEditData: values.canEditData
+            }
+        };
+
+        // Initialize permissions for new role
+        const newPerms = { ...permissions };
+        newPerms[newRole.id] = { sheetVisibility: {}, columnVisibility: {}, columnReadonly: {} };
+        
+        onUpdatePermissions(newPerms);
+        onRolesChange([...roles, newRole]);
+        message.success('角色已创建');
+        setIsRoleModalOpen(false);
+        roleForm.resetFields();
+    });
+  };
+
+  const handleDeleteRole = (id: string) => {
+      Modal.confirm({
+          title: '删除角色',
+          content: '确定要删除此角色吗？',
+          onOk: () => {
+              const newRoles = roles.filter(r => r.id !== id);
+              onRolesChange(newRoles);
+              // Fallback if deleting current role
+              if (currentUserRole === id) onRoleChange('Viewer');
+              message.success('角色已删除');
+          }
+      })
   };
 
   const renderViewIcon = (type: ViewType) => {
@@ -61,6 +120,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           case 'grid': return <LayoutGrid size={16} />;
           case 'kanban': return <Kanban size={16} />;
           case 'gallery': return <ImageIcon size={16} />;
+          case 'gantt': return <CalendarRange size={16} />;
       }
   }
 
@@ -72,6 +132,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           case 'modify_table': return { placeholder: '如：添加一列“优先级”，类型为单选...', hint: '修改当前表结构' };
           case 'fill_data': return { placeholder: '如：生成 20 条关于科技公司的模拟数据...', hint: '智能填充数据 (参考表结构)' };
           case 'analyze_data': return { placeholder: '如：分析销售额趋势，推荐图表...', hint: '生成图表与洞察' };
+          case 'analyze_row_data': return { placeholder: '如：分析这些数据的共同点...', hint: '仅分析当前选中的行数据 (Max 100)' };
       }
   };
   
@@ -155,6 +216,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             { value: 'modify_table', label: <span className="flex items-center gap-2"><Settings2 size={14} className="text-blue-500"/> 单表处理 (修改结构)</span> },
                             { value: 'fill_data', label: <span className="flex items-center gap-2"><Wand2 size={14} className="text-pink-500"/> 填充数据 (当前表)</span> },
                             { value: 'analyze_data', label: <span className="flex items-center gap-2"><BarChart3 size={14} className="text-orange-500"/> 分析数据 (当前表)</span> },
+                            { value: 'analyze_row_data', label: <span className="flex items-center gap-2"><ListChecks size={14} className="text-emerald-500"/> 行数据分析 (选中行)</span> },
                         ]}
                     />
                 </div>
@@ -195,7 +257,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     />
                     <button 
                         onClick={handleSend}
-                        disabled={(!input.trim() && aiMode !== 'analyze_data') || status === AIStatus.LOADING}
+                        disabled={(!input.trim() && aiMode !== 'analyze_data' && aiMode !== 'analyze_row_data') || status === AIStatus.LOADING}
                         className="absolute right-2 bottom-2 p-1.5 bg-indigo-600 text-white rounded-lg disabled:opacity-50 disabled:bg-slate-300 hover:bg-indigo-700 transition-colors z-10 shadow-sm"
                     >
                         <Send size={14} />
@@ -241,7 +303,9 @@ const Sidebar: React.FC<SidebarProps> = ({
                                  <div className={`text-sm font-medium ${activeViewId === view.id ? 'text-indigo-900' : 'text-slate-700'}`}>
                                      {view.name}
                                  </div>
-                                 <div className="text-[10px] text-slate-400 capitalize">{view.type === 'grid' ? '表格视图' : view.type === 'kanban' ? '看板视图' : '画廊视图'}</div>
+                                 <div className="text-[10px] text-slate-400 capitalize">
+                                    {view.type === 'grid' ? '表格视图' : view.type === 'kanban' ? '看板视图' : view.type === 'gallery' ? '画廊视图' : '甘特图'}
+                                 </div>
                              </div>
                          </div>
                          {views.length > 1 && (
@@ -260,6 +324,85 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       ),
     },
+    {
+      key: 'settings',
+      label: <span className="flex items-center gap-2"><Settings size={14}/> 设置</span>,
+      children: (
+        <div className="p-4 h-full bg-slate-50/50 overflow-y-auto">
+             
+             {/* Role Switcher */}
+             <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm mb-4">
+                <div className="text-sm font-medium text-slate-800 mb-3 flex items-center gap-2">
+                    <User size={16} className="text-indigo-600"/>
+                    当前角色 (测试模式)
+                </div>
+                <div className="text-xs text-slate-500 mb-4 leading-relaxed">
+                    切换不同的用户角色，体验系统在不同权限下的表现。
+                </div>
+                
+                <Radio.Group 
+                    value={currentUserRole} 
+                    onChange={e => onRoleChange(e.target.value)}
+                    className="flex flex-col gap-3"
+                >
+                    {roles.map(role => (
+                        <Radio key={role.id} value={role.id} className="items-start">
+                            <div className="ml-1">
+                                <span className="text-sm font-medium block text-slate-700">
+                                    {role.name} 
+                                    {role.isSystem && <span className="text-xs text-slate-400 ml-2 bg-slate-100 px-1 rounded">系统</span>}
+                                </span>
+                                <span className="text-xs text-slate-400 block mt-0.5">{role.description}</span>
+                            </div>
+                        </Radio>
+                    ))}
+                </Radio.Group>
+             </div>
+
+             {/* Role Management */}
+             <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm mb-4">
+                 <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-medium text-slate-800 flex items-center gap-2">
+                        <UserCog size={16} className="text-indigo-600"/>
+                        角色管理
+                    </div>
+                    <Button size="small" icon={<Plus size={14}/>} onClick={() => setIsRoleModalOpen(true)}>添加角色</Button>
+                 </div>
+                 
+                 <div className="space-y-2">
+                    {roles.map(role => (
+                        <div key={role.id} className="flex items-center justify-between p-2 hover:bg-slate-50 rounded border border-transparent hover:border-slate-100 transition-colors">
+                            <div className="text-xs font-medium text-slate-700">{role.name}</div>
+                            {!role.isSystem && (
+                                <Button 
+                                    type="text" 
+                                    size="small" 
+                                    danger 
+                                    icon={<Trash2 size={12}/>} 
+                                    onClick={() => handleDeleteRole(role.id)}
+                                />
+                            )}
+                        </div>
+                    ))}
+                 </div>
+             </div>
+
+             {/* Permission Config Button */}
+             <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
+                 <div className="text-sm font-medium text-slate-800 mb-2 flex items-center gap-2">
+                    <ShieldAlert size={16} className="text-blue-600"/>
+                    字段权限
+                 </div>
+                 <div className="text-xs text-slate-500 mb-3">
+                     配置各个角色的表格与字段可见性及编辑权限。
+                 </div>
+                 <Button type="default" block size="small" onClick={() => setIsPermModalOpen(true)}>
+                     配置可见性
+                 </Button>
+             </div>
+        </div>
+      )
+    }
   ];
 
   return (
@@ -283,26 +426,28 @@ const Sidebar: React.FC<SidebarProps> = ({
         onCancel={() => setIsViewModalOpen(false)}
         okText="创建"
         cancelText="取消"
+        width={500}
       >
           <div className="space-y-4 py-4">
               <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">视图名称</label>
-                  <Input value={newViewName} onChange={e => setNewViewName(e.target.value)} placeholder="例如: 任务看板" />
+                  <Input value={newViewName} onChange={e => setNewViewName(e.target.value)} placeholder="例如: 任务甘特图" />
               </div>
               <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">视图类型</label>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 gap-3">
                       {[
                           { type: 'grid', label: '表格', icon: <LayoutGrid size={20}/> },
                           { type: 'kanban', label: '看板', icon: <Kanban size={20}/> },
                           { type: 'gallery', label: '画廊', icon: <ImageIcon size={20}/> },
+                          { type: 'gantt', label: '甘特图', icon: <CalendarRange size={20}/> },
                       ].map(item => (
                           <div 
                             key={item.type}
                             onClick={() => setNewViewType(item.type as ViewType)}
                             className={`cursor-pointer rounded-lg border p-3 flex flex-col items-center gap-2 transition-all ${
                                 newViewType === item.type 
-                                    ? 'bg-indigo-50 border-indigo-500 text-indigo-700' 
+                                    ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm' 
                                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                             }`}
                           >
@@ -313,6 +458,47 @@ const Sidebar: React.FC<SidebarProps> = ({
                   </div>
               </div>
           </div>
+      </Modal>
+
+      <PermissionModal 
+          isOpen={isPermModalOpen}
+          onClose={() => setIsPermModalOpen(false)}
+          sheets={sheets}
+          permissions={permissions}
+          onSave={onUpdatePermissions}
+          roles={roles}
+      />
+
+      {/* Role Creation Modal */}
+      <Modal
+          title="创建新角色"
+          open={isRoleModalOpen}
+          onOk={handleSaveRole}
+          onCancel={() => setIsRoleModalOpen(false)}
+          okText="创建"
+          cancelText="取消"
+      >
+          <Form form={roleForm} layout="vertical" className="pt-4">
+              <Form.Item name="name" label="角色名称" rules={[{ required: true }]}>
+                  <Input placeholder="例如: 财务专员" />
+              </Form.Item>
+              <Form.Item name="description" label="描述">
+                  <Input placeholder="角色描述..." />
+              </Form.Item>
+              
+              <div className="bg-slate-50 p-3 rounded border border-slate-100">
+                  <div className="text-xs font-bold text-slate-500 mb-3 uppercase">基础能力配置</div>
+                  <Form.Item name="canManageSheets" valuePropName="checked" initialValue={false}>
+                      <Checkbox>允许管理工作表 (创建/删除/重命名)</Checkbox>
+                  </Form.Item>
+                  <Form.Item name="canEditSchema" valuePropName="checked" initialValue={false}>
+                      <Checkbox>允许修改表结构 (添加/编辑/删除列)</Checkbox>
+                  </Form.Item>
+                  <Form.Item name="canEditData" valuePropName="checked" initialValue={true}>
+                      <Checkbox>允许编辑数据 (添加/修改/删除行)</Checkbox>
+                  </Form.Item>
+              </div>
+          </Form>
       </Modal>
     </div>
   );
